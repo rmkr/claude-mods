@@ -3,7 +3,6 @@ import type { EngineInterface as $, Register } from 'claude-code'
 
 import type { CacheTtl } from '../types'
 
-const PANE = 'cache-timer'
 const lastAt = atom({ plugin: 'cache-timer', key: 'lastAt' } as const, null as number | null)
 const tokens = atom({ plugin: 'cache-timer', key: 'tokens' } as const, 0)
 const ttl = atom({ plugin: 'cache-timer', key: 'ttl' } as const, '5m' as CacheTtl)
@@ -11,6 +10,7 @@ const isAuto = atom({ plugin: 'cache-timer', key: 'isAuto' } as const, false)
 const leadSec = atom({ plugin: 'cache-timer', key: 'leadSec' } as const, 30)
 const isRunning = atom({ plugin: 'cache-timer', key: 'isRunning' } as const, false)
 const hasCompacted = atom({ plugin: 'cache-timer', key: 'hasCompacted' } as const, false)
+const isHidden = atom({ plugin: 'cache-timer', key: 'isHidden' } as const, false)
 const now = atom({ plugin: 'cache-timer', key: 'now' } as const, 0)
 
 const ttlMs = (t: CacheTtl) => (t === '1h' ? 3_600_000 : 300_000)
@@ -56,15 +56,14 @@ async function tick($: $) {
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
-    await $.command.register({ name: 'cache', description: 'Show the prompt cache countdown pane' })
+    await $.command.register({ name: 'cache', description: 'Show the prompt cache band again' })
     $.clock.every(1000, () => void tick($))
-    void $.ui.open({ id: PANE, title: 'Prompt cache' })
     return next(e)
   })
 
   on('command.run', { command: 'cache' }, async $ => {
-    await $.ui.open({ id: PANE, title: 'Prompt cache' })
-    return { text: 'Prompt cache pane opened.' }
+    await update($, isHidden, () => false)
+    return { text: 'Prompt cache band shown.' }
   })
 
   on('turn.start', async ($, e, next) => {
@@ -89,50 +88,41 @@ export const register: Register = on => {
     return next(e)
   })
 
-  on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
+  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    if (e.props.hasSurvey || (await read($, isHidden))) return next(e)
     const { Box, Text, Button } = $.ui.resolve(e)
-    const t = await read($, now)
-    const ms = await left($, t)
+    const ms = await left($, await read($, now))
     const size = kTokens(await read($, tokens))
-    const currentTtl = await read($, ttl)
-    const auto = await read($, isAuto)
     const lead = await read($, leadSec)
 
-    let line = 'No request yet'
+    let line = 'Cache: no request yet'
     let color = 'gray'
-    if (await read($, isRunning)) line = 'Turn running, cache refreshing'
-    else if (ms === null && (await read($, hasCompacted))) line = 'Compacted, cache rebuilds on next message'
+    if (e.props.isWorking) line = 'Cache: refreshing'
+    else if (ms === null && (await read($, hasCompacted))) line = 'Cache: compacted, rebuilds on next message'
     else if (ms !== null && ms > 0) {
-      line = `${clock(ms)} left (${size} tokens warm)`
+      line = `Cache ${clock(ms)} left · ${size} warm`
       color = ms > lead * 1000 + 30_000 ? 'green' : 'yellow'
     } else if (ms !== null) {
-      line = `Expired ${clock(-ms)} ago, next message re-sends ${size} tokens`
+      line = `Cache expired ${clock(-ms)} ago · next message re-sends ${size}`
       color = 'red'
     }
 
     return (
-      <Box flexDirection="column" gap={1}>
+      <Box flexDirection="row" gap={1} flexWrap="wrap">
         <Text bold color={color}>
           {line}
         </Text>
-        <Box flexDirection="row" gap={1} flexWrap="wrap">
-          <Button key="compact" label="Compact now" variant="primary" onPress={() => compact($)} />
-          <Button
-            key="ttl"
-            label={`TTL ${currentTtl}`}
-            onPress={() => update($, ttl, v => (v === '5m' ? '1h' : '5m'))}
-          />
-        </Box>
-        <Box flexDirection="row" gap={1} flexWrap="wrap">
-          <Button
-            key="auto"
-            label={`Auto-compact: ${auto ? 'on' : 'off'}`}
-            onPress={() => update($, isAuto, v => !v)}
-          />
-          <Button key="less" label="-15s" onPress={() => update($, leadSec, v => Math.max(15, v - 15))} />
-          <Text dimColor>{lead}s before expiry</Text>
-          <Button key="more" label="+15s" onPress={() => update($, leadSec, v => Math.min(600, v + 15))} />
-        </Box>
+        <Button key="compact" label="Compact" variant="primary" onPress={() => compact($)} />
+        <Button key="ttl" label={`TTL ${await read($, ttl)}`} onPress={() => update($, ttl, v => (v === '5m' ? '1h' : '5m'))} />
+        <Button
+          key="auto"
+          label={`Auto: ${(await read($, isAuto)) ? 'on' : 'off'}`}
+          onPress={() => update($, isAuto, v => !v)}
+        />
+        <Button key="less" label="-15s" onPress={() => update($, leadSec, v => Math.max(15, v - 15))} />
+        <Text dimColor>{lead}s before</Text>
+        <Button key="more" label="+15s" onPress={() => update($, leadSec, v => Math.min(600, v + 15))} />
+        <Button key="close" label="Close" role="dismiss" onPress={() => update($, isHidden, () => true)} />
       </Box>
     )
   })

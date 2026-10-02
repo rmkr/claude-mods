@@ -10,6 +10,7 @@ declare module 'claude-code' {
       leadSec: number
       isRunning: boolean
       hasCompacted: boolean
+      isHidden: boolean
       now: number
     }
   }
