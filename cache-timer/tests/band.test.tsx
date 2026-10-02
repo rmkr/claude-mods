@@ -105,8 +105,15 @@ for (const surface of ['terminal', 'desktop'] as const) {
 const USAGE = { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 50_000, cache_creation_input_tokens: 1000 }
 
 // stands for the engine under the plugin: a session, a main model step that caches the conversation, toasts
-function engine(on: any, fork: () => unknown = () => ({ isAnswered: true, text: 'OK', usage: USAGE }), agents: unknown[] = []) {
+function engine(
+  on: any,
+  fork: () => unknown = () => ({ isAnswered: true, text: 'OK', usage: USAGE }),
+  agents: unknown[] = [],
+  saved: Record<string, unknown> = {},
+) {
   const toasts: string[] = []
+  mock.store(on, saved)
+  on('session.id', () => ({ value: 'this' }) as any)
   on('session.start', ($: any, e: any) => ({ cwd: e.cwd }))
   on('command.register', () => ({ value: null }) as any)
   on('agent.list', () => ({ value: agents }) as any)
@@ -219,5 +226,25 @@ test('the auto button cycles off, compact, keep warm, off with one settings writ
   }
   expect(writes).toEqual(['compact', 'keep warm', 'off'])
   expect(labels.map(l => l?.split(' ').slice(0, 2).join(' '))).toEqual(['auto compact', 'auto warm', 'auto off'])
+  await ui.unmount()
+})
+
+test('a reopened conversation picks up its countdown', async ($, on) => {
+  const clock = mock.clock(on, { now: 10_000_000 })
+  engine(on, undefined, [], { 'last:this': { at: 10_000_000 - 15 * 60_000, tokens: 50_000 } })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await clock.advance(1000)
+  const ui = await $.ui.mount({ plugin: 'cache-timer', surface: 'terminal', ...BAND })
+  expect((await ui.find({ key: 'time' }))?.text).toBe('45m')
+  await ui.unmount()
+})
+
+test('a conversation reopened after its cache ran out starts over', async ($, on) => {
+  const clock = mock.clock(on, { now: 10_000_000 })
+  engine(on, undefined, [], { 'last:this': { at: 10_000_000 - 2 * 3_600_000, tokens: 50_000 } })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await clock.advance(1000)
+  const ui = await $.ui.mount({ plugin: 'cache-timer', surface: 'terminal', ...BAND })
+  expect((await ui.find({ key: 'time' }))?.text).toBe('—')
   await ui.unmount()
 })

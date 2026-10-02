@@ -30,6 +30,8 @@ let isNarrowShown = false
 // keep-warm pings that failed in a row: capped even while a background agent runs, so a failing API is not
 // retried every second
 let failedPings = 0
+// the last lastAt saved to the store; undefined after a reload, so the first tick saves it
+let savedAt: number | null | undefined
 
 // ms left before the cache lapses; null when there is nothing cached to lose
 async function left($: $, t: number) {
@@ -110,7 +112,32 @@ export function refreshesMain(agentId: string | undefined, usage: ModelUsage, ca
   return agentId === undefined || (cached > 0 && usage.cache_read_input_tokens >= cached * 0.9)
 }
 
+// the countdown outlives a restart: the last request's time, saved per session (the transcript's id), so a
+// resumed conversation picks it up; in this one place, since lastAt changes in many
+async function save($: $) {
+  const last = await read($, lastAt)
+  if (last === savedAt) return
+  savedAt = last
+  const key = `last:${await $.session.id()}`
+  await (last === null ? $.store.delete(key) : $.store.set(key, { at: last, tokens: await read($, cachedTokens) }))
+}
+
+async function restore($: $, ttl: CacheTtl) {
+  const t = await $.clock.now()
+  const saved = (await $.store.get(`last:${await $.session.id()}`)) as { at: number; tokens: number } | undefined
+  if (saved && saved.at + ttlMs(ttl) > t) {
+    await update($, lastAt, () => saved.at)
+    await update($, cachedTokens, () => saved.tokens)
+  }
+  // other sessions' entries whose cache has run out: nothing would read them
+  for (const key of await $.store.keys()) {
+    const v = (await $.store.get(key)) as { at?: number } | undefined
+    if (key.startsWith('last:') && (v?.at ?? 0) + ttlMs('1h') < t) await $.store.delete(key)
+  }
+}
+
 async function tick($: $, lead: number) {
+  await save($)
   const mode = await read($, autoMode)
   const t = await $.clock.now()
   const ms = await left($, t)
@@ -171,6 +198,7 @@ export const register: Register = (on, options) => {
     })
     await update($, ttl, () => configTtl)
     await update($, autoMode, () => configMode)
+    await restore($, configTtl)
     $.clock.every(1000, () => void tick($, lead))
     return next(e)
   })
