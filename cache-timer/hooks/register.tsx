@@ -330,7 +330,7 @@ export const register: Register = (on, options) => {
     const hitText = hit === null ? null : `${hit}%`
     const autoText = isArmed ? `auto ${mode === 'keep warm' ? 'warm' : mode} ${label(total - lead)}` : 'auto off'
     const used =
-      2 + 6 + text.length + 1 + (hitText ? hitText.length + 1 : 0) + autoText.length + 1 + (isWarm && !working ? 14 : 0) + (canCompact ? 12 : 0) + 4
+      2 + 6 + text.length + 1 + (hitText ? hitText.length + 1 : 0) + autoText.length + 1 + (isWarm && !working ? 14 : 0) + (canCompact ? 12 : 0) + 4 + 6 // ponytail: 6 cells of slack, as the desktop draws buttons wider than cells; measure if it still clips
     // the compact view: chosen by clicking the time, or forced when the band is too narrow for the full row and
     // a bar of at least 8 segments; a forced one has nothing to open, so its time is plain text
     const isCollapsedByUser = await read($, isCollapsed)
