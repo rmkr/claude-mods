@@ -9,6 +9,7 @@ declare module 'claude-code' {
       isRunning: boolean
       hasCompacted: boolean
       isHidden: boolean
+      isCollapsed: boolean
       now: number
     }
   }

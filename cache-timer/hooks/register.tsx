@@ -9,6 +9,7 @@ const ttl = atom({ plugin: 'cache-timer', key: 'ttl' } as const, '1h' as CacheTt
 const isRunning = atom({ plugin: 'cache-timer', key: 'isRunning' } as const, false)
 const hasCompacted = atom({ plugin: 'cache-timer', key: 'hasCompacted' } as const, false)
 const isHidden = atom({ plugin: 'cache-timer', key: 'isHidden' } as const, false)
+const isCollapsed = atom({ plugin: 'cache-timer', key: 'isCollapsed' } as const, false)
 const now = atom({ plugin: 'cache-timer', key: 'now' } as const, 0)
 
 const ttlMs = (t: CacheTtl) => (t === '1h' ? 3_600_000 : 300_000)
@@ -45,11 +46,42 @@ async function compact($: $) {
   }
 }
 
+// settings are userConfig fields; writing one saves to settings.json and reloads the module with the new value
+async function setOption($: $, field: string, value: boolean | string) {
+  const row = (await $.config.list()).find(r => r.key.replace(/@\w+/, '') === `cache-timer.${field}`)
+  if (!row) {
+    $.ui.toast(`cache-timer: ${field} not found; set it in /config`)
+    return
+  }
+  const r = await $.config.set({ key: row.key, value })
+  if (r.deny) $.ui.toast(`cache-timer: ${field} unchanged: ${r.deny}`)
+}
+
+type Run = { text: string; ink: 'color' | 'fg' | 'dim' }
+
+// the countdown bar as runs of one ink: `color` the time left, `dim` the time gone,
+// `fg` (the theme's own text colour) the segment where auto-compact fires
+export function bar(fraction: number, markAt: number | null): Run[] {
+  const filled = Math.round(fraction * SEGMENTS)
+  const cells: Run[] = Array.from({ length: SEGMENTS }, (_, i) => ({ text: '■', ink: i < filled ? 'color' : 'dim' }))
+  if (markAt !== null) cells[Math.min(SEGMENTS - 1, Math.round(markAt * SEGMENTS))] = { text: '■', ink: 'fg' }
+  const runs: Run[] = []
+  for (const c of cells) {
+    const last = runs[runs.length - 1]
+    if (last && last.ink === c.ink) last.text += c.text
+    else runs.push({ ...c })
+  }
+  return runs
+}
+
 async function tick($: $, isAuto: boolean, lead: number) {
   const t = await $.clock.now()
   await update($, now, () => t)
   const ms = await left($, t)
-  $.ui.status(ms === null ? undefined : ms > 0 ? `cache ${clock(ms)}` : 'cache cold')
+  // the status line stands in for the band only while the band is closed
+  // collapsed, the countdown moves to the status line below the prompt
+  const isFolded = await read($, isCollapsed)
+  $.ui.status(ms === null || !isFolded ? undefined : ms > 0 ? `cache ${short(ms)}` : 'cache cold')
   // a lead as long as the TTL would compact right after every turn
   const isDue = ms !== null && ms > 0 && ms <= lead && lead < ttlMs(await read($, ttl))
   if (isDue && isAuto && !(await read($, hasCompacted))) await compact($)
@@ -60,7 +92,7 @@ export const register: Register = (on, options) => {
   const isAuto = options.autoCompact === true
   const lead = Math.max(0.1, Number(options.minutesBeforeExpiry) || 5) * 60_000
   const configTtl: CacheTtl = options.ttl === '5m' ? '5m' : '1h'
-  const isMeter = options.style === 'meter'
+  const style = options.style === 'quiet' ? 'quiet' : 'segmented'
 
   on('session.start', async ($, e, next) => {
     await $.command.register({ name: 'cache', description: 'Show the prompt cache band again' })
@@ -71,6 +103,7 @@ export const register: Register = (on, options) => {
 
   on('command.run', { command: 'cache' }, async $ => {
     await update($, isHidden, () => false)
+    await update($, isCollapsed, () => false)
     const total = ttlMs(await read($, ttl))
     const auto = isAuto ? `on, at ${short(total - lead)}` : 'off'
     return { text: `Cache band shown. TTL ${await read($, ttl)}, auto-compact ${auto}. Change them in /config.` }
@@ -100,7 +133,7 @@ export const register: Register = (on, options) => {
   })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    if (e.props.hasSurvey || (await read($, isHidden))) return next(e)
+    if (e.props.hasSurvey || (await read($, isHidden)) || (await read($, isCollapsed))) return next(e)
     const { Box, Text, Button } = $.ui.resolve(e)
     const ms = await left($, await read($, now))
     const total = ttlMs(await read($, ttl))
@@ -117,47 +150,62 @@ export const register: Register = (on, options) => {
       label = 'expired'
       color = 'red'
     }
-    const facts = [
-      hit !== null && `${hit}% hit`,
-      isAuto && lead < total && `auto at ${short(total - lead)}`,
-    ].filter((f): f is string => typeof f === 'string')
     const close = <Button key="close" label="×" plain role="dismiss" onPress={() => update($, isHidden, () => true)} />
+    // clicking the countdown collapses the band into the status line; /cache brings it back
+    const time = <Button key="time" label={label} plain onPress={() => update($, isCollapsed, () => true)} />
+    const auto = (
+      <Button
+        key="auto"
+        label={isAuto && lead < total ? `auto at ${short(total - lead)}` : 'auto off'}
+        plain
+        dimColor
+        onPress={() => setOption($, 'autoCompact', !isAuto)}
+      />
+    )
 
-    if (!isMeter) {
+    if (style === 'quiet') {
       return (
-        <Box flexDirection="row" justifyContent="flex-end" alignItems="center" gap={1}>
+        <Box flexDirection="row" alignItems="center" gap={1}>
           <Text color={color}>●</Text>
           <Text dimColor>cache</Text>
-          <Text bold color={color}>
-            {label}
-          </Text>
-          {facts.map(f => (
-            <Text key={f} dimColor>
-              · {f}
-            </Text>
-          ))}
-          <Text dimColor>·</Text>
+          {time}
+          {hit !== null && <Text dimColor>· {hit}% hit ·</Text>}
+          {auto}
+          <Box flexGrow={1} />
           <Button key="compact" label="Compact" plain onPress={() => compact($)} />
           {close}
         </Box>
       )
     }
 
-    const filled = e.props.isWorking ? SEGMENTS : Math.round((Math.max(0, ms ?? 0) / total) * SEGMENTS)
+    const runs = bar(
+      e.props.isWorking ? 1 : Math.max(0, ms ?? 0) / total,
+      isAuto && lead < total ? lead / total : null,
+    )
     return (
       <Box flexDirection="row" alignItems="center" gap={1}>
         <Text color={color}>●</Text>
         <Text dimColor>cache</Text>
-        <Text bold color={color}>
-          {label}
-        </Text>
+        {time}
         <Text>
-          <Text color={color}>{'■'.repeat(filled)}</Text>
-          <Text dimColor>{'■'.repeat(SEGMENTS - filled)}</Text>
+          {runs.map((r, i) =>
+            r.ink === 'color' ? (
+              <Text key={i} color={color}>
+                {r.text}
+              </Text>
+            ) : r.ink === 'dim' ? (
+              <Text key={i} dimColor>
+                {r.text}
+              </Text>
+            ) : (
+              <Text key={i}>{r.text}</Text>
+            ),
+          )}
         </Text>
-        <Text dimColor>{facts.join(' · ')}</Text>
+        {hit !== null && <Text dimColor>{hit}% hit ·</Text>}
+        {auto}
         <Box flexGrow={1} />
-        <Button key="compact" label="Compact" onPress={() => compact($)} />
+        <Button key="compact" label="Compact" variant="primary" onPress={() => compact($)} />
         {close}
       </Box>
     )

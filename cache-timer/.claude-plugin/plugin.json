@@ -29,11 +29,11 @@
     "style": {
       "type": "string",
       "title": "Band style",
-      "description": "quiet: one small line on the right. meter: a card with a segmented countdown bar.",
-      "default": "quiet",
+      "description": "segmented: a countdown bar. quiet: the same line without the bar.",
+      "default": "segmented",
       "options": [
-        "quiet",
-        "meter"
+        "segmented",
+        "quiet"
       ]
     }
   }
