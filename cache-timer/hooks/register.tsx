@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface as $, ModelUsage, Register } from 'claude-code'
 
-import type { CacheTtl } from '../types'
+import type { AutoMode, CacheTtl } from '../types'
 
 const lastAt = atom({ plugin: 'cache-timer', key: 'lastAt' } as const, null as number | null)
 const cachedTokens = atom({ plugin: 'cache-timer', key: 'cachedTokens' } as const, 0)
@@ -10,11 +10,12 @@ const ttl = atom({ plugin: 'cache-timer', key: 'ttl' } as const, '1h' as CacheTt
 const isRunning = atom({ plugin: 'cache-timer', key: 'isRunning' } as const, false)
 const hasCompacted = atom({ plugin: 'cache-timer', key: 'hasCompacted' } as const, false)
 const pings = atom({ plugin: 'cache-timer', key: 'pings' } as const, 0)
+const isCollapsed = atom({ plugin: 'cache-timer', key: 'isCollapsed' } as const, false)
 const isHidden = atom({ plugin: 'cache-timer', key: 'isHidden' } as const, false)
 const now = atom({ plugin: 'cache-timer', key: 'now' } as const, 0)
+const autoMode = atom({ plugin: 'cache-timer', key: 'autoMode' } as const, 'off' as AutoMode)
 const frame = atom({ plugin: 'cache-timer', key: 'frame' } as const, 0)
 
-type AutoMode = 'off' | 'compact' | 'keep warm'
 
 const ttlMs = (t: CacheTtl) => (t === '1h' ? 3_600_000 : 300_000)
 const clock = (ms: number) => {
@@ -104,10 +105,10 @@ type Run = { text: string; ink: 'color' | 'fg' | 'dim' }
 
 // the countdown bar as runs of one ink: `color` the time left, `dim` the time gone,
 // `fg` (the theme's own text colour) the segment where the auto action fires
-export function bar(fraction: number, markAt: number | null): Run[] {
-  const filled = Math.round(fraction * SEGMENTS)
-  const cells: Run[] = Array.from({ length: SEGMENTS }, (_, i) => ({ text: '■', ink: i < filled ? 'color' : 'dim' }))
-  if (markAt !== null) cells[Math.min(SEGMENTS - 1, Math.round(markAt * SEGMENTS))] = { text: '■', ink: 'fg' }
+export function bar(fraction: number, markAt: number | null, n = SEGMENTS): Run[] {
+  const filled = Math.round(fraction * n)
+  const cells: Run[] = Array.from({ length: n }, (_, i) => ({ text: '■', ink: i < filled ? 'color' : 'dim' }))
+  if (markAt !== null) cells[Math.min(n - 1, Math.round(markAt * n))] = { text: '■', ink: 'fg' }
   return runsOf(cells)
 }
 
@@ -123,9 +124,15 @@ function runsOf(cells: Run[]): Run[] {
 }
 
 // the sweep shown while Claude works: a three-segment comet running left to right, then off the end and around
-export function sweep(step: number): Run[] {
-  const head = step % (SEGMENTS + 3)
-  return runsOf(Array.from({ length: SEGMENTS }, (_, i) => ({ text: '■', ink: i <= head && i > head - 3 ? 'color' : 'dim' })))
+export function sweep(step: number, n = SEGMENTS): Run[] {
+  const head = step % (n + 3)
+  return runsOf(Array.from({ length: n }, (_, i) => ({ text: '■', ink: i <= head && i > head - 3 ? 'color' : 'dim' })))
+}
+
+// the bar takes whatever the rest of the row leaves, from 8 to 24 segments; `used` is the other items' width in
+// cells, a gap included for each, and each Button adds about 4 cells of chrome
+export function segmentsFor(columns: number, used: number): number {
+  return Math.max(8, Math.min(SEGMENTS, columns - used))
 }
 
 // advances the sweep five times a second, only while a turn runs
@@ -133,7 +140,8 @@ async function animate($: $) {
   if (await read($, isRunning)) await update($, frame, n => n + 1)
 }
 
-async function tick($: $, mode: AutoMode, lead: number) {
+async function tick($: $, lead: number) {
+  const mode = await read($, autoMode)
   const t = await $.clock.now()
   await update($, now, () => t)
   const ms = await left($, t)
@@ -154,15 +162,20 @@ async function tick($: $, mode: AutoMode, lead: number) {
 
 // settings are the plugin's userConfig (plugin.json): rows in /config, saved in settings.json
 export const register: Register = (on, options) => {
-  const mode: AutoMode = options.autoKeepWarm === true ? 'keep warm' : options.autoCompact === true ? 'compact' : 'off'
+  const configMode: AutoMode = options.autoKeepWarm === true ? 'keep warm' : options.autoCompact === true ? 'compact' : 'off'
   const lead = Math.max(0.1, Number(options.minutesBeforeExpiry) || 5) * 60_000
   const configTtl: CacheTtl = options.ttl === '5m' ? '5m' : '1h'
   const NEXT_MODE: Record<AutoMode, AutoMode> = { off: 'compact', compact: 'keep warm', 'keep warm': 'off' }
 
   on('session.start', async ($, e, next) => {
-    await $.command.register({ name: 'cache', description: 'Show or hide the prompt cache band; /cache help for more' })
+    await $.command.register({
+      name: 'cache',
+      description: 'Show or hide the prompt cache band; /cache help for more',
+      immediate: true,
+    })
     await update($, ttl, () => configTtl)
-    $.clock.every(1000, () => void tick($, mode, lead))
+    await update($, autoMode, () => configMode)
+    $.clock.every(1000, () => void tick($, lead))
     $.clock.every(200, () => void animate($))
     return next(e)
   })
@@ -171,6 +184,7 @@ export const register: Register = (on, options) => {
   on('command.run', { command: 'cache' }, async ($, e) => {
     const [what = '', value = ''] = e.args.trim().toLowerCase().split(/\s+/)
     const total = ttlMs(await read($, ttl))
+    const mode = await read($, autoMode)
     const autoText = mode === 'off' || lead >= total ? 'off' : `${mode} at ${short(total - lead)}`
     if (what === '') {
       const isNowHidden = !(await read($, isHidden))
@@ -184,13 +198,17 @@ export const register: Register = (on, options) => {
     const modes: Record<string, AutoMode> = { off: 'off', on: 'compact', compact: 'compact', warm: 'keep warm', 'keep-warm': 'keep warm' }
     const picked = modes[value]
     if (what === 'auto' && picked) {
+      await update($, autoMode, () => picked)
       await setMode($, picked)
       return { text: `Auto: ${picked}.` }
     }
     const minutes = /^(\d+(?:\.\d+)?)m?$/.exec(value)
     if (what === 'auto' && minutes) {
       await setOption($, 'minutesBeforeExpiry', Number(minutes[1]))
-      if (mode === 'off') await setMode($, 'compact')
+      if (mode === 'off') {
+        await update($, autoMode, () => 'compact')
+        await setMode($, 'compact')
+      }
       return { text: `Auto acts ${minutes[1]} minutes before the cache expires.` }
     }
     if (what === 'ttl' && (value === '5m' || value === '1h')) {
@@ -205,6 +223,7 @@ export const register: Register = (on, options) => {
         '  Compact             summarize the conversation now; later messages send less',
         '  Keep warm           restart the cache timer now with one tiny request; nothing is lost',
         '  auto ...            click to cycle: off, compact, keep warm',
+        '  –                   collapse to a small pill; click the pill to open it again',
         '',
         'Commands',
         '  /cache              show or hide the band',
@@ -260,6 +279,7 @@ export const register: Register = (on, options) => {
     const ms = await left($, await read($, now))
     const total = ttlMs(await read($, ttl))
     const hit = await read($, hitPct)
+    const mode = await read($, autoMode)
     const isArmed = mode !== 'off' && lead < total
 
     let label = '—'
@@ -277,7 +297,22 @@ export const register: Register = (on, options) => {
       label = 'expired'
       color = 'red'
     }
-    const runs = e.props.isWorking ? sweep(step) : bar(Math.max(0, ms ?? 0) / total, isArmed ? lead / total : null)
+    const hitText = hit === null ? null : `${hit}%`
+    const autoText = isArmed ? `auto ${mode === 'keep warm' ? 'warm' : mode} ${short(total - lead)}` : 'auto off'
+    const isWarm = ms !== null && ms > 0
+    const used =
+      2 + 6 + label.length + 1 + (hitText ? hitText.length + 1 : 0) + autoText.length + 1 + (isWarm ? 14 : 0) + 12 + 4
+    const n = segmentsFor(e.props.bodyColumns, used)
+    // collapsed: one clickable pill; clicking it opens the band again
+    if (await read($, isCollapsed)) {
+      return (
+        <Box flexDirection="row" alignItems="center" gap={1}>
+          <Text color={color}>●</Text>
+          <Button key="expand" label={`cache ${label}`} plain onPress={() => update($, isCollapsed, () => false)} />
+        </Box>
+      )
+    }
+    const runs = e.props.isWorking ? sweep(step, n) : bar(Math.max(0, ms ?? 0) / total, isArmed ? lead / total : null, n)
     return (
       <Box flexDirection="row" alignItems="center" gap={1}>
         <Text color={color}>●</Text>
@@ -285,7 +320,7 @@ export const register: Register = (on, options) => {
         <Text bold color={color}>
           {label}
         </Text>
-        <Text wrap="truncate">
+        <Text>
           {runs.map((r, i) =>
             r.ink === 'color' ? (
               <Text key={i} color={color}>
@@ -300,23 +335,23 @@ export const register: Register = (on, options) => {
             ),
           )}
         </Text>
-        {hit !== null && (
-          <Box flexShrink={0}>
-            <Text dimColor wrap="truncate">
-              {hit}% hit ·
-            </Text>
-          </Box>
-        )}
+        {hitText && <Text dimColor>{hitText}</Text>}
         <Button
           key="auto"
-          label={isArmed ? `auto ${mode} at ${short(total - lead)}` : 'auto off'}
+          label={autoText}
           plain
           dimColor
-          onPress={() => setMode($, NEXT_MODE[mode])}
+          onPress={async () => {
+            // the band changes at once; the saved setting catches up when the module reloads
+            const picked = NEXT_MODE[mode]
+            await update($, autoMode, () => picked)
+            await setMode($, picked)
+          }}
         />
         <Box flexGrow={1} />
-        {ms !== null && ms > 0 && <Button key="warm" label="Keep warm" onPress={() => keepWarm($)} />}
+        {isWarm && <Button key="warm" label="Keep warm" onPress={() => keepWarm($)} />}
         <Button key="compact" label="Compact" variant="primary" onPress={() => compact($)} />
+        <Button key="collapse" label="–" plain dimColor onPress={() => update($, isCollapsed, () => true)} />
       </Box>
     )
   })

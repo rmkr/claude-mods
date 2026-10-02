@@ -1,12 +1,12 @@
 import { expect, test } from 'claude-code/testing'
 
-import { bar, refreshesMain, sweep } from '../hooks/register'
+import { bar, refreshesMain, segmentsFor, sweep } from '../hooks/register'
 
 const BAND = { component: 'AbovePrompt', props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 100 } } as const
 
 // one test per surface: the session's state (hidden) outlives a mount
 for (const surface of ['terminal', 'desktop'] as const) {
-  test(`the band draws, and /cache hides and shows it on ${surface}`, async ($, on) => {
+  test(`the band draws, collapses to a pill and back, and /cache hides and shows it on ${surface}`, async ($, on) => {
     // stands for the engine, which draws nothing in the band once the plugin passes
     on('ui.render', ($, e) => {
       const { Box } = $.ui.resolve(e)
@@ -16,6 +16,10 @@ for (const surface of ['terminal', 'desktop'] as const) {
     expect(await ui.find({ key: 'compact' })).toBeDefined()
     expect(await ui.find({ key: 'auto' })).toBeDefined()
     expect(await ui.find({ key: 'close' })).toBeUndefined()
+    await ui.press({ key: 'collapse' })
+    expect(await ui.find({ key: 'compact' })).toBeUndefined()
+    await ui.press({ key: 'expand' })
+    expect(await ui.find({ key: 'compact' })).toBeDefined()
     await $.command.run({ command: 'cache', args: '' })
     expect(await ui.find({ key: 'compact' })).toBeUndefined()
     await $.command.run({ command: 'cache', args: '' })
@@ -47,4 +51,11 @@ test('the sweep is a three-segment comet that runs off the end and starts over',
   expect(lit(24 + 2)).toBe(0)
   expect(lit(24 + 3)).toBe(1)
   expect(sweep(10).map(r => r.text).join('')).toHaveLength(24)
+})
+
+test('the bar takes the room the rest of the row leaves, 8 to 24 segments', async () => {
+  expect(segmentsFor(200, 60)).toBe(24)
+  expect(segmentsFor(80, 60)).toBe(20)
+  expect(segmentsFor(50, 60)).toBe(8)
+  expect(bar(0.5, null, 10).map(r => r.text).join('')).toHaveLength(10)
 })
