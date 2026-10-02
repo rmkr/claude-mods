@@ -4,9 +4,9 @@ import { bar } from '../hooks/register'
 
 const BAND = { component: 'AbovePrompt', props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 100 } } as const
 
-// one test per surface: the session's state (collapsed or not) outlives a mount
+// one test per surface: the session's state (folded, hidden) outlives a mount
 for (const surface of ['terminal', 'desktop'] as const) {
-  test(`the band draws and collapses on ${surface}`, async ($, on) => {
+  test(`the band folds, opens, hides and comes back on ${surface}`, async ($, on) => {
     // stands for the engine, which draws nothing in the band once the plugin passes
     on('ui.render', ($, e) => {
       const { Box } = $.ui.resolve(e)
@@ -17,6 +17,13 @@ for (const surface of ['terminal', 'desktop'] as const) {
     expect(await ui.find({ key: 'auto' })).toBeDefined()
     await ui.press({ key: 'time' })
     expect(await ui.find({ key: 'compact' })).toBeUndefined()
+    expect(await ui.find({ key: 'time' })).toBeDefined()
+    await ui.press({ key: 'time' })
+    expect(await ui.find({ key: 'compact' })).toBeDefined()
+    await ui.press({ key: 'close' })
+    expect(await ui.find({ key: 'compact' })).toBeUndefined()
+    await $.command.run({ command: 'cache' })
+    expect(await ui.find({ key: 'compact' })).toBeDefined()
     await ui.unmount()
   })
 }

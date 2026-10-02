@@ -78,10 +78,6 @@ async function tick($: $, isAuto: boolean, lead: number) {
   const t = await $.clock.now()
   await update($, now, () => t)
   const ms = await left($, t)
-  // the status line stands in for the band only while the band is closed
-  // collapsed, the countdown moves to the status line below the prompt
-  const isFolded = await read($, isCollapsed)
-  $.ui.status(ms === null || !isFolded ? undefined : ms > 0 ? `cache ${short(ms)}` : 'cache cold')
   // a lead as long as the TTL would compact right after every turn
   const isDue = ms !== null && ms > 0 && ms <= lead && lead < ttlMs(await read($, ttl))
   if (isDue && isAuto && !(await read($, hasCompacted))) await compact($)
@@ -133,7 +129,7 @@ export const register: Register = (on, options) => {
   })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    if (e.props.hasSurvey || (await read($, isHidden)) || (await read($, isCollapsed))) return next(e)
+    if (e.props.hasSurvey || (await read($, isHidden))) return next(e)
     const { Box, Text, Button } = $.ui.resolve(e)
     const ms = await left($, await read($, now))
     const total = ttlMs(await read($, ttl))
@@ -151,8 +147,16 @@ export const register: Register = (on, options) => {
       color = 'red'
     }
     const close = <Button key="close" label="×" plain role="dismiss" onPress={() => update($, isHidden, () => true)} />
-    // clicking the countdown collapses the band into the status line; /cache brings it back
-    const time = <Button key="time" label={label} plain onPress={() => update($, isCollapsed, () => true)} />
+    // clicking the countdown folds the band to the dot and the time; clicking again opens it
+    const time = <Button key="time" label={label} plain onPress={() => update($, isCollapsed, v => !v)} />
+    if (await read($, isCollapsed)) {
+      return (
+        <Box flexDirection="row" alignItems="center" gap={1}>
+          <Text color={color}>●</Text>
+          {time}
+        </Box>
+      )
+    }
     const auto = (
       <Button
         key="auto"
