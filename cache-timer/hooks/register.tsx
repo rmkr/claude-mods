@@ -300,14 +300,14 @@ export const register: Register = (on, options) => {
           <Text bold color={color}>
             {text}
           </Text>
-          <Button key="expand" label="+" plain dimColor onPress={press} />
+          {!working && <Button key="expand" label="+" plain dimColor onPress={press} />}
         </Box>
       )
     }
     const hitText = hit === null ? null : `${hit}%`
     const autoText = isArmed ? `auto ${mode === 'keep warm' ? 'warm' : mode} ${short(total - lead)}` : 'auto off'
     const used =
-      2 + 6 + text.length + 1 + (hitText ? hitText.length + 1 : 0) + autoText.length + 1 + (isWarm && !working ? 14 : 0) + (working ? 0 : 12) + 4
+      2 + 6 + text.length + 1 + (hitText ? hitText.length + 1 : 0) + autoText.length + 1 + (isWarm && !working ? 14 : 0) + (working ? 0 : 12 + 4)
     const n = segmentsFor(e.props.bodyColumns, used)
     const runs = working ? sweep(step, n) : bar(Math.max(0, remaining ?? 0) / total, isArmed ? lead / total : null, n)
     return (
@@ -333,11 +333,12 @@ export const register: Register = (on, options) => {
           )}
         </Text>
         {hitText && <Text dimColor>{hitText}</Text>}
-        <Button key="auto" label={autoText} plain dimColor onPress={press} />
+        {/* while the sweep runs the band redraws five times a second and buttons miss clicks, so it has none */}
+        {working ? <Text dimColor>{autoText}</Text> : <Button key="auto" label={autoText} plain dimColor onPress={press} />}
         <Box flexGrow={1} />
         {isWarm && !working && <Button key="warm" label="Keep warm" onPress={press} />}
         {!working && <Button key="compact" label="Compact" variant="primary" onPress={press} />}
-        <Button key="collapse" label="–" plain dimColor onPress={press} />
+        {!working && <Button key="collapse" label="–" plain dimColor onPress={press} />}
       </Box>
     )
   })

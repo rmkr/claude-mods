@@ -62,10 +62,12 @@ test('the bar takes the room its region leaves, 8 to 24 segments', async () => {
 })
 
 for (const surface of ['terminal', 'desktop'] as const) {
-  test(`while Claude works there is nothing to compact or keep warm on ${surface}`, async $ => {
+  test(`while Claude works the band has no buttons on ${surface}`, async $ => {
     const ui = await $.ui.mount({ plugin: 'cache-timer', surface, ...BAND, props: { ...BAND.props, isWorking: true } })
     expect(await ui.find({ key: 'compact' })).toBeUndefined()
     expect(await ui.find({ key: 'warm' })).toBeUndefined()
+    expect(await ui.find({ key: 'auto' })).toBeUndefined()
+    expect(await ui.find({ key: 'collapse' })).toBeUndefined()
     await ui.unmount()
   })
 }

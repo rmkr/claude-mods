@@ -8,7 +8,7 @@ Mods for Claude Code: plugins of function hooks that add panes, status line entr
 
 Shows how long until the prompt cache expires, so you can compact before the next message has to re-send the whole conversation uncached.
 
-- **Band above the prompt**: `● cache 44m ■■■■■■■■□□□□ 98% · auto warm 55m   Keep warm  Compact  –`. Time left, a bar of the TTL remaining with a mark where the auto action fires, and the last turn's cache hit rate. Green while there's time, yellow near the auto action, red once expired. While Claude works, a spinner replaces the time and a highlight sweeps across the bar.
+- **Band above the prompt**: `● cache 44m ■■■■■■■■□□□□ 98% · auto warm 55m   Keep warm  Compact  –`. Time left, a bar of the TTL remaining with a mark where the auto action fires, and the last turn's cache hit rate. Green while there's time, yellow near the auto action, red once expired. While Claude works, a spinner replaces the time, a highlight sweeps across the bar, and the buttons step aside until the turn ends.
 - **Keep warm**: one tiny request over the conversation, which the API serves from the cache, restarting its timer. Nothing is summarized or lost. Shown only while the cache is still warm and Claude isn't working.
 - **Compact**: summarizes the conversation now, so later messages send less. Hidden while Claude is working.
 - **Auto**: off by default. `compact` or `keep warm` runs 5 minutes before expiry (55 minutes into a 1h cache). Auto keep warm stops after 3 pings with no message from you.
