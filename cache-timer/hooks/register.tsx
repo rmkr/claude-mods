@@ -50,15 +50,15 @@ async function compact($: $) {
       $.ui.toast(`Compact skipped: ${r.skip}`)
       return
     }
-    await update($, lastAt, () => null)
     $.ui.toast('Compacted')
   } catch {
     // the desktop app and other SDK hosts compact only inside a turn: run /compact as if typed (a submitted
-    // prompt would reach the model as text, not run the command)
+    // prompt would reach the model as text, not run the command); not when a turn began meanwhile, as it would
+    // compact right after that turn, on a fresh cache
+    if (await refuseMidTurn($, 'compact')) return
     $.ui.toast('Compacting')
     try {
       await $.command.run({ command: 'compact', args: '' })
-      await update($, lastAt, () => null)
     } catch (err) {
       $.ui.toast(`Compact failed: ${err instanceof Error ? err.message : String(err)}`)
     }
@@ -67,27 +67,28 @@ async function compact($: $) {
 
 // one tiny request over the conversation as the main thread last sent it: the API serves that prefix from the
 // cache, which restarts its timer; the reply itself is thrown away
-async function keepWarm($: $) {
-  if (await refuseMidTurn($, 'keep warm')) return
+// says how it went rather than toasting, so /cache warm can reply with it
+async function keepWarm($: $): Promise<{ ok: boolean; text: string }> {
+  if (await read($, isRunning)) return { ok: false, text: 'Cannot keep warm while a turn is running' }
   const r = await $.model.fork({ prompt: 'Reply with the single word OK.' })
-  if (!r.isAnswered && r.reason === 'nothing-to-fork') {
-    $.ui.toast('Nothing cached yet')
-    return
-  }
-  if ('usage' in r && r.usage) {
+  // an empty reply still made the request; an API error or an abort carries zero usage and touched nothing
+  if (r.isAnswered || r.reason === 'empty-reply') {
     const t = await $.clock.now()
     await update($, lastAt, () => t)
     await update($, hasWarned, () => false)
     const wasWarm = r.usage.cache_read_input_tokens >= (await read($, cachedTokens)) * 0.9
-    $.ui.toast(wasWarm ? 'Cache kept warm' : 'Cache had expired; it was written again')
-    return
+    return { ok: true, text: wasWarm ? 'Cache kept warm' : 'Cache had expired; it was written again' }
   }
-  $.ui.toast(`Keep warm failed: ${r.isAnswered ? 'no usage reported' : r.reason}`)
+  if (r.reason === 'nothing-to-fork') {
+    await update($, lastAt, () => null)
+    return { ok: false, text: 'Nothing cached yet' }
+  }
+  return { ok: false, text: `Keep warm failed: ${r.reason}` }
 }
 
 // settings are userConfig fields; writing one saves to settings.json and reloads the module with the new value
 async function setOption($: $, field: string, value: boolean | number | string) {
-  const row = (await $.config.list()).find(r => r.key.replace(/@\w+/, '') === `cache-timer.${field}`)
+  const row = (await $.config.list()).find(r => r.key.replace(/@[^.]+/, '') === `cache-timer.${field}`)
   if (!row) {
     $.ui.toast(`cache-timer: ${field} not found; set it in /config`)
     return
@@ -116,8 +117,7 @@ async function tick($: $, lead: number) {
   const next = shownLeft(ms)
   if ((await read($, shown)) !== next) await update($, shown, () => next)
   if (isNarrowShown && Math.floor(t / 1000) % 3 === 0) await update($, widthCheck, n => n + 1)
-  // a lead as long as the TTL would act right after every turn
-  const isDue = ms !== null && ms > 0 && ms <= lead && lead < ttlMs(await read($, ttl))
+  const isDue = ms !== null && ms > 0 && ms <= lead
   if (!isDue || isBusy) return
   isBusy = true
   try {
@@ -133,9 +133,11 @@ async function tick($: $, lead: number) {
     })
     if (action === 'compact') await compact($)
     if (action === 'keep warm') {
-      // pings count only an idle stretch; a background agent at work is not one
-      if (!isBackground) await update($, pings, n => n + 1)
-      await keepWarm($)
+      const r = await keepWarm($)
+      $.ui.toast(r.text)
+      // pings count only an idle stretch, which a background agent at work is not; a failed one always counts, so
+      // a failing API is not retried every second
+      if (!r.ok || !isBackground) await update($, pings, n => n + 1)
     }
     if (action === 'warn') {
       await update($, hasWarned, () => true)
@@ -150,8 +152,10 @@ async function tick($: $, lead: number) {
 // settings are the plugin's userConfig (plugin.json): rows in /config, saved in settings.json
 export const register: Register = (on, options) => {
   const configMode: AutoMode = options.autoKeepWarm === true ? 'keep warm' : options.autoCompact === true ? 'compact' : 'off'
-  const lead = Math.max(0.1, Number(options.minutesBeforeExpiry) || 5) * 60_000
   const configTtl: CacheTtl = options.ttl === '5m' ? '5m' : '1h'
+  const minutes = Number(options.minutesBeforeExpiry ?? 5)
+  // a lead as long as the TTL would never come due: act a minute into the cache at the earliest
+  const lead = Math.min(Math.max(0.1, Number.isFinite(minutes) ? minutes : 5) * 60_000, ttlMs(configTtl) - 60_000)
   const NEXT_MODE: Record<AutoMode, AutoMode> = { off: 'compact', compact: 'keep warm', 'keep warm': 'off' }
 
   on('session.start', async ($, e, next) => {
@@ -171,16 +175,13 @@ export const register: Register = (on, options) => {
     const [what = '', value = ''] = e.args.trim().toLowerCase().split(/\s+/)
     const total = ttlMs(await read($, ttl))
     const mode = await read($, autoMode)
-    const autoText = mode === 'off' || lead >= total ? 'off' : `${mode} at ${label(total - lead)}`
+    const autoText = mode === 'off' ? 'off' : `${mode} at ${label(total - lead)}`
     if (what === '') {
       const isNowHidden = !(await read($, isHidden))
       await update($, isHidden, () => isNowHidden)
       return { text: isNowHidden ? 'Cache band hidden. /cache shows it.' : 'Cache band shown. /cache help lists the controls.' }
     }
-    if (what === 'warm') {
-      await keepWarm($)
-      return { text: 'Keep warm sent.' }
-    }
+    if (what === 'warm') return { text: (await keepWarm($)).text }
     const modes: Record<string, AutoMode> = { off: 'off', compact: 'compact', 'keep-warm': 'keep warm' }
     const picked = modes[value]
     if (what === 'auto' && picked) {
@@ -258,9 +259,27 @@ export const register: Register = (on, options) => {
     return next(e)
   })
 
-  // the engine knows the real TTL; learn it whenever a compaction reports it
-  on('classic.PreCompact', async ($, e, next) => {
-    await update($, ttl, () => e.cache_ttl)
+  // any compaction of the main conversation, the band's, a typed /compact or the engine's own: the cache it
+  // counted down is gone
+  on('session.compact', async ($, e, next) => {
+    const r = await next(e)
+    if (e.agentId === undefined && e.trigger !== 'precompute' && !r.skip) {
+      await update($, lastAt, () => null)
+      await update($, hasCompacted, () => true)
+    }
+    return r
+  })
+
+  // /clear starts the conversation over under the same plugin state, with nothing cached for it yet
+  on('session.end', async ($, e, next) => {
+    if (e.reason === 'clear') {
+      await update($, lastAt, () => null)
+      await update($, cachedTokens, () => 0)
+      await update($, hitPct, () => null)
+      await update($, hasWarned, () => false)
+      await update($, hasCompacted, () => false)
+      await update($, pings, () => 0)
+    }
     return next(e)
   })
 
@@ -273,7 +292,7 @@ export const register: Register = (on, options) => {
         void compact($)
         break
       case 'warm':
-        void keepWarm($)
+        void keepWarm($).then(r => $.ui.toast(r.text))
         break
       case 'auto': {
         // the band changes at once; the saved setting catches up when the module reloads
@@ -304,7 +323,7 @@ export const register: Register = (on, options) => {
     const total = ttlMs(await read($, ttl))
     const hit = await read($, hitPct)
     const mode = await read($, autoMode)
-    const isArmed = mode !== 'off' && lead < total
+    const isArmed = mode !== 'off'
     const working = e.props.isWorking
     // presses are handled by key in the ui.press hook above
     const press = () => {}

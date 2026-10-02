@@ -1,6 +1,6 @@
 {
   "name": "cache-timer",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Prompt cache countdown with compact, keep warm, and an automatic action before it expires",
   "author": {
     "name": "rmkr",
@@ -29,7 +29,7 @@
     "ttl": {
       "type": "string",
       "title": "Cache TTL",
-      "description": "How long the prompt cache lives. Corrects itself for the session after a compaction.",
+      "description": "How long the prompt cache lives.",
       "default": "1h",
       "options": [
         "1h",

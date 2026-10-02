@@ -1,4 +1,4 @@
-import { expect, test } from 'claude-code/testing'
+import { expect, mock, test } from 'claude-code/testing'
 
 import { bar, label, nextAction, segmentsFor, shownLeft } from '../hooks/bars'
 import { refreshesMain } from '../hooks/register'
@@ -101,3 +101,70 @@ for (const surface of ['terminal', 'desktop'] as const) {
     await ui.unmount()
   })
 }
+
+const USAGE = { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 50_000, cache_creation_input_tokens: 1000 }
+
+// stands for the engine under the plugin: a session, a main model step that caches the conversation, toasts
+function engine(on: any, fork: () => unknown = () => ({ isAnswered: true, text: 'OK', usage: USAGE })) {
+  const toasts: string[] = []
+  on('session.start', ($: any, e: any) => ({ cwd: e.cwd }))
+  on('command.register', () => ({ value: null }) as any)
+  on('agent.list', () => ({ value: [] }) as any)
+  on('model.fork', () => ({ value: fork() }) as any)
+  on('ui.toast', ($: any, e: any) => {
+    toasts.push(e.text)
+    return { value: null } as any
+  })
+  on('turn.step', async function* () {
+    return { turnId: 't', index: 0, answer: 'hi', toolUses: [], stopReason: 'end_turn', usage: { model: 'm', ...USAGE } }
+  })
+  return toasts
+}
+
+async function cacheOnce($: any) {
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  for await (const _ of $.turn.step({ turnId: 't', index: 0, model: 'm', messageCount: 3 })) {
+  }
+}
+
+test('a failed keep warm leaves the countdown running out and stops after 3 tries', { options: { autoKeepWarm: true } }, async ($, on) => {
+  const clock = mock.clock(on, { now: 1_000_000 })
+  let forks = 0
+  const toasts = engine(on, () => (forks++, { isAnswered: false, reason: 'api-error', status: 529, usage: { ...USAGE, cache_read_input_tokens: 0 } }))
+  await cacheOnce($)
+  for (let i = 0; i < 55 * 60 + 10; i++) await clock.advance(1000)
+  expect(forks).toBe(3)
+  expect(toasts.every(t => t.startsWith('Keep warm failed'))).toBe(true)
+  const ui = await $.ui.mount({ plugin: 'cache-timer', surface: 'terminal', ...BAND })
+  expect((await ui.find({ key: 'time' }))?.text).toBe('5m')
+  await ui.unmount()
+})
+
+test('on a 5m cache the default lead still reminds once', { options: { ttl: '5m' } }, async ($, on) => {
+  const clock = mock.clock(on, { now: 1_000_000 })
+  const toasts = engine(on)
+  await cacheOnce($)
+  for (let i = 0; i < 4 * 60; i++) await clock.advance(1000)
+  expect(toasts.filter(t => t.startsWith('Cache expires'))).toHaveLength(1)
+})
+
+test('a compaction or a /clear ends the countdown', async ($, on) => {
+  const clock = mock.clock(on, { now: 1_000_000 })
+  engine(on)
+  on('session.compact', () => ({ messages: [{ role: 'user', text: 'summary', toolUses: [] }] }) as any)
+  on('session.end', ($: any, e: any) => ({ sessionId: e.sessionId }) as any)
+  await cacheOnce($)
+  await clock.advance(1000)
+  const ui = await $.ui.mount({ plugin: 'cache-timer', surface: 'terminal', ...BAND })
+  expect(await ui.find({ key: 'compact' })).toBeDefined()
+  await $.session.compact({ trigger: 'manual', messages: [{ role: 'user', text: 'hi', toolUses: [] }] } as any)
+  await clock.advance(1000)
+  expect((await ui.find({ key: 'time' }))?.text).toBe('compacted')
+  await cacheOnce($)
+  await clock.advance(1000)
+  expect(await ui.find({ key: 'compact' })).toBeDefined()
+  await $.session.end({ reason: 'clear', sessionId: 's' } as any)
+  await clock.advance(1000)
+  expect((await ui.find({ key: 'time' }))?.text).toBe('—')
+  await ui.unmount()
+})

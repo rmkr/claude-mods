@@ -18,7 +18,7 @@ The band sits above the chat box:
 | --- | --- |
 | `●` and the time | Time left before the cache expires. Whole minutes, then seconds in the last minute. Green while there's time, yellow near the auto action, red once expired. Click the time to shrink the band to `● 44m`; click it again to open it. A narrow window gets the small view on its own. |
 | Bar | The same countdown as a bar. One segment in your text colour marks where the auto action fires. |
-| `98%` | How much of the last turn's input came from the cache. |
+| `98%` | How much of the last request's input came from the cache. |
 | `auto …` | What happens automatically before expiry: `auto off`, `auto compact 55m` or `auto warm 55m`. Click to cycle off → compact → keep warm. |
 | `Keep warm` | Restarts the cache timer with one tiny request. Nothing is summarized or lost. Shown only while the cache is still warm. |
 | `Compact` | Summarizes the conversation now, so later messages send less. Shown once there's a conversation to compact; in the desktop app it sends `/compact` for you. |
@@ -55,7 +55,7 @@ Settings persist across sessions. Change them with the band and `/cache` command
 | Auto-compact | off | Compact before the cache expires, at most once per idle stretch; waits while a background agent runs |
 | Auto keep warm | off | Keep the cache warm before it expires instead; wins over auto-compact if both are on |
 | Minutes before expiry | 5 | When the auto action runs (5 = 55 minutes into a 1h cache) |
-| Cache TTL | 1h | How long the cache lives; corrects itself after a compaction reports the real value |
+| Cache TTL | 1h | How long the cache lives |
 
 ### What keeps the cache warm
 
