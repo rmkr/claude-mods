@@ -53,9 +53,15 @@ async function compact($: $) {
     await update($, lastAt, () => null)
     $.ui.toast('Compacted')
   } catch {
-    // the desktop app and other SDK hosts compact only inside a turn: send /compact as if typed
-    void $.prompt.submit({ text: '/compact' })
+    // the desktop app and other SDK hosts compact only inside a turn: run /compact as if typed (a submitted
+    // prompt would reach the model as text, not run the command)
     $.ui.toast('Compacting')
+    try {
+      await $.command.run({ command: 'compact', args: '' })
+      await update($, lastAt, () => null)
+    } catch (err) {
+      $.ui.toast(`Compact failed: ${err instanceof Error ? err.message : String(err)}`)
+    }
   }
 }
 
