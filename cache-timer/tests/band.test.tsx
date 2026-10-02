@@ -105,11 +105,11 @@ for (const surface of ['terminal', 'desktop'] as const) {
 const USAGE = { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 50_000, cache_creation_input_tokens: 1000 }
 
 // stands for the engine under the plugin: a session, a main model step that caches the conversation, toasts
-function engine(on: any, fork: () => unknown = () => ({ isAnswered: true, text: 'OK', usage: USAGE })) {
+function engine(on: any, fork: () => unknown = () => ({ isAnswered: true, text: 'OK', usage: USAGE }), agents: unknown[] = []) {
   const toasts: string[] = []
   on('session.start', ($: any, e: any) => ({ cwd: e.cwd }))
   on('command.register', () => ({ value: null }) as any)
-  on('agent.list', () => ({ value: [] }) as any)
+  on('agent.list', () => ({ value: agents }) as any)
   on('model.fork', () => ({ value: fork() }) as any)
   on('ui.toast', ($: any, e: any) => {
     toasts.push(e.text)
@@ -127,7 +127,7 @@ async function cacheOnce($: any) {
   }
 }
 
-test('a failed keep warm leaves the countdown running out and stops after 3 tries', { options: { autoKeepWarm: true } }, async ($, on) => {
+test('a failed keep warm leaves the countdown running out and stops after 3 tries', { options: { autoMode: 'keep warm' } }, async ($, on) => {
   const clock = mock.clock(on, { now: 1_000_000 })
   let forks = 0
   const toasts = engine(on, () => (forks++, { isAnswered: false, reason: 'api-error', status: 529, usage: { ...USAGE, cache_read_input_tokens: 0 } }))
@@ -137,6 +137,31 @@ test('a failed keep warm leaves the countdown running out and stops after 3 trie
   expect(toasts.every(t => t.startsWith('Keep warm failed'))).toBe(true)
   const ui = await $.ui.mount({ plugin: 'cache-timer', surface: 'terminal', ...BAND })
   expect((await ui.find({ key: 'time' }))?.text).toBe('5m')
+  await ui.unmount()
+})
+
+test('failed keep warms stop after 3 tries while a background agent runs too', { options: { autoMode: 'keep warm' } }, async ($, on) => {
+  const clock = mock.clock(on, { now: 1_000_000 })
+  let forks = 0
+  const failed = () => (forks++, { isAnswered: false, reason: 'api-error', status: 529, usage: { ...USAGE, cache_read_input_tokens: 0 } })
+  const toasts = engine(on, failed, [{ status: 'running' }])
+  await cacheOnce($)
+  for (let i = 0; i < 55 * 60 + 30; i++) await clock.advance(1000)
+  expect(forks).toBe(3)
+  expect(toasts.filter(t => t.startsWith('Cache expires'))).toHaveLength(1)
+})
+
+test("the band's Compact ends the countdown", async ($, on) => {
+  const clock = mock.clock(on, { now: 1_000_000 })
+  engine(on)
+  on('session.compact', () => ({ messages: [{ role: 'user', text: 'summary', toolUses: [] }] }) as any)
+  await cacheOnce($)
+  await clock.advance(1000)
+  const ui = await $.ui.mount({ plugin: 'cache-timer', surface: 'terminal', ...BAND })
+  await ui.press({ key: 'compact' })
+  await clock.advance(1000)
+  expect((await ui.find({ key: 'time' }))?.text).toBe('compacted')
+  expect(await ui.find({ key: 'compact' })).toBeUndefined()
   await ui.unmount()
 })
 
@@ -152,6 +177,8 @@ test('a compaction or a /clear ends the countdown', async ($, on) => {
   const clock = mock.clock(on, { now: 1_000_000 })
   engine(on)
   on('session.compact', () => ({ messages: [{ role: 'user', text: 'summary', toolUses: [] }] }) as any)
+  on('turn.start', ($: any, e: any) => ({ turnId: e.turnId }) as any)
+  on('turn.complete', () => ({ text: '' }) as any)
   on('session.end', ($: any, e: any) => ({ sessionId: e.sessionId }) as any)
   await cacheOnce($)
   await clock.advance(1000)
@@ -160,11 +187,37 @@ test('a compaction or a /clear ends the countdown', async ($, on) => {
   await $.session.compact({ trigger: 'manual', messages: [{ role: 'user', text: 'hi', toolUses: [] }] } as any)
   await clock.advance(1000)
   expect((await ui.find({ key: 'time' }))?.text).toBe('compacted')
+  // the desktop app runs /compact as a turn with no request of its own
+  await $.turn.start({ text: '/compact', turnId: 'c' } as any)
+  await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 'c', reason: 'answer' } as any)
+  await clock.advance(1000)
+  expect((await ui.find({ key: 'time' }))?.text).toBe('compacted')
   await cacheOnce($)
   await clock.advance(1000)
   expect(await ui.find({ key: 'compact' })).toBeDefined()
   await $.session.end({ reason: 'clear', sessionId: 's' } as any)
   await clock.advance(1000)
   expect((await ui.find({ key: 'time' }))?.text).toBe('—')
+  await ui.unmount()
+})
+
+test('the auto button cycles off, compact, keep warm, off with one settings write each', async ($, on) => {
+  mock.clock(on, { now: 1_000_000 })
+  engine(on)
+  const writes: unknown[] = []
+  on('config.list', () => ({ value: [{ key: 'cache-timer.autoMode', label: 'Auto action', kind: 'choice', value: 'off', provider: { plugin: 'cache-timer', tier: 'user' }, isLocked: false }] }) as any)
+  on('config.set', ($: any, e: any) => {
+    writes.push(e.value)
+    return { value: e.value } as any
+  })
+  await cacheOnce($)
+  const ui = await $.ui.mount({ plugin: 'cache-timer', surface: 'terminal', ...BAND })
+  const labels: (string | undefined)[] = []
+  for (let i = 0; i < 3; i++) {
+    await ui.press({ key: 'auto' })
+    labels.push((await ui.find({ key: 'auto' }))?.text)
+  }
+  expect(writes).toEqual(['compact', 'keep warm', 'off'])
+  expect(labels.map(l => l?.split(' ').slice(0, 2).join(' '))).toEqual(['auto compact', 'auto warm', 'auto off'])
   await ui.unmount()
 })

@@ -52,8 +52,7 @@ Settings persist across sessions. Change them with the band and `/cache` command
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
-| Auto-compact | off | Compact before the cache expires, at most once per idle stretch; waits while a background agent runs |
-| Auto keep warm | off | Keep the cache warm before it expires instead; wins over auto-compact if both are on |
+| Auto action | off | What happens before the cache expires: `compact` (at most once per idle stretch; waits while a background agent runs), `keep warm`, or `off` (a reminder instead) |
 | Minutes before expiry | 5 | When the auto action runs (5 = 55 minutes into a 1h cache) |
 | Cache TTL | 1h | How long the cache lives |
 
