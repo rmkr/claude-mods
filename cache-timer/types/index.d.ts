@@ -9,8 +9,10 @@ declare module 'claude-code' {
       ttl: CacheTtl
       isRunning: boolean
       hasCompacted: boolean
+      pings: number
       isHidden: boolean
       now: number
+      frame: number
     }
   }
 }

@@ -1,7 +1,7 @@
 {
   "name": "cache-timer",
   "version": "0.1.0",
-  "description": "Prompt cache countdown with compact and auto-compact before it expires",
+  "description": "Prompt cache countdown with compact, keep warm, and an automatic action before it expires",
   "types": "./types/index.d.ts",
   "userConfig": {
     "autoCompact": {
@@ -10,10 +10,16 @@
       "description": "Compact on its own before the prompt cache expires, at most once per idle stretch.",
       "default": false
     },
+    "autoKeepWarm": {
+      "type": "boolean",
+      "title": "Auto keep warm",
+      "description": "Before the cache expires, send one tiny request so it stays warm instead of compacting. Wins over auto-compact when both are on; stops after 3 pings with no message from you.",
+      "default": false
+    },
     "minutesBeforeExpiry": {
       "type": "number",
-      "title": "Auto-compact minutes before expiry",
-      "description": "How long before the cache expires to compact. 5 compacts at 55 minutes on a 1h cache.",
+      "title": "Minutes before expiry",
+      "description": "How long before the cache expires the auto action runs. 5 acts at 55 minutes on a 1h cache.",
       "default": 5
     },
     "ttl": {

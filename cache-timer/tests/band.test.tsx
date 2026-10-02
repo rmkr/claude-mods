@@ -1,12 +1,12 @@
 import { expect, test } from 'claude-code/testing'
 
-import { bar, refreshesMain } from '../hooks/register'
+import { bar, refreshesMain, sweep } from '../hooks/register'
 
 const BAND = { component: 'AbovePrompt', props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 100 } } as const
 
 // one test per surface: the session's state (hidden) outlives a mount
 for (const surface of ['terminal', 'desktop'] as const) {
-  test(`the band draws, and × and /cache hide and show it on ${surface}`, async ($, on) => {
+  test(`the band draws, and /cache hides and shows it on ${surface}`, async ($, on) => {
     // stands for the engine, which draws nothing in the band once the plugin passes
     on('ui.render', ($, e) => {
       const { Box } = $.ui.resolve(e)
@@ -15,12 +15,11 @@ for (const surface of ['terminal', 'desktop'] as const) {
     const ui = await $.ui.mount({ plugin: 'cache-timer', surface, ...BAND })
     expect(await ui.find({ key: 'compact' })).toBeDefined()
     expect(await ui.find({ key: 'auto' })).toBeDefined()
-    await ui.press({ key: 'close' })
+    expect(await ui.find({ key: 'close' })).toBeUndefined()
+    await $.command.run({ command: 'cache', args: '' })
     expect(await ui.find({ key: 'compact' })).toBeUndefined()
     await $.command.run({ command: 'cache', args: '' })
     expect(await ui.find({ key: 'compact' })).toBeDefined()
-    await $.command.run({ command: 'cache', args: '' })
-    expect(await ui.find({ key: 'compact' })).toBeUndefined()
     await ui.unmount()
   })
 }
@@ -39,4 +38,13 @@ test('main requests and forks keep the cache warm; a subagent on its own prompt 
   expect(refreshesMain('fork', usage(49_000), 50_000)).toBe(true)
   expect(refreshesMain('explorer', usage(3_000), 50_000)).toBe(false)
   expect(refreshesMain('explorer', usage(3_000), 0)).toBe(false)
+})
+
+test('the sweep is a three-segment comet that runs off the end and starts over', async () => {
+  const lit = (step: number) => sweep(step).filter(r => r.ink === 'color').map(r => r.text).join('').length
+  expect(lit(0)).toBe(1)
+  expect(lit(5)).toBe(3)
+  expect(lit(24 + 2)).toBe(0)
+  expect(lit(24 + 3)).toBe(1)
+  expect(sweep(10).map(r => r.text).join('')).toHaveLength(24)
 })

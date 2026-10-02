@@ -9,8 +9,12 @@ const hitPct = atom({ plugin: 'cache-timer', key: 'hitPct' } as const, null as n
 const ttl = atom({ plugin: 'cache-timer', key: 'ttl' } as const, '1h' as CacheTtl)
 const isRunning = atom({ plugin: 'cache-timer', key: 'isRunning' } as const, false)
 const hasCompacted = atom({ plugin: 'cache-timer', key: 'hasCompacted' } as const, false)
+const pings = atom({ plugin: 'cache-timer', key: 'pings' } as const, 0)
 const isHidden = atom({ plugin: 'cache-timer', key: 'isHidden' } as const, false)
 const now = atom({ plugin: 'cache-timer', key: 'now' } as const, 0)
+const frame = atom({ plugin: 'cache-timer', key: 'frame' } as const, 0)
+
+type AutoMode = 'off' | 'compact' | 'keep warm'
 
 const ttlMs = (t: CacheTtl) => (t === '1h' ? 3_600_000 : 300_000)
 const clock = (ms: number) => {
@@ -20,6 +24,12 @@ const clock = (ms: number) => {
 // m:ss under ten minutes, whole minutes above (a 1h TTL reads as "44m")
 const short = (ms: number) => (ms < 600_000 ? clock(ms) : `${Math.ceil(ms / 60_000)}m`)
 const SEGMENTS = 24
+const SPINNER = '⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
+// ponytail: auto keep-warm stops after 3 pings with nobody typing, so a session left overnight lets its cache go;
+// make it a setting if longer absences matter
+const MAX_PINGS = 3
+// one cache action at a time; a reload starts it over
+let isBusy = false
 
 // ms left before the cache lapses; null when there is nothing cached to lose
 async function left($: $, t: number) {
@@ -46,8 +56,30 @@ async function compact($: $) {
   }
 }
 
+// one tiny request over the conversation as the main thread last sent it: the API serves that prefix from the
+// cache, which restarts its timer; the reply itself is thrown away
+async function keepWarm($: $) {
+  if (await read($, isRunning)) {
+    $.ui.toast('Cannot keep warm while a turn is running')
+    return
+  }
+  const r = await $.model.fork({ prompt: 'Reply with the single word OK.' })
+  if (!r.isAnswered && r.reason === 'nothing-to-fork') {
+    $.ui.toast('Nothing cached yet')
+    return
+  }
+  if ('usage' in r && r.usage) {
+    const t = await $.clock.now()
+    await update($, lastAt, () => t)
+    const wasWarm = r.usage.cache_read_input_tokens >= (await read($, cachedTokens)) * 0.9
+    $.ui.toast(wasWarm ? 'Cache kept warm' : 'Cache had expired; it was written again')
+    return
+  }
+  $.ui.toast(`Keep warm failed: ${r.isAnswered ? 'no usage reported' : r.reason}`)
+}
+
 // settings are userConfig fields; writing one saves to settings.json and reloads the module with the new value
-async function setOption($: $, field: string, value: boolean | string) {
+async function setOption($: $, field: string, value: boolean | number | string) {
   const row = (await $.config.list()).find(r => r.key.replace(/@\w+/, '') === `cache-timer.${field}`)
   if (!row) {
     $.ui.toast(`cache-timer: ${field} not found; set it in /config`)
@@ -55,6 +87,11 @@ async function setOption($: $, field: string, value: boolean | string) {
   }
   const r = await $.config.set({ key: row.key, value })
   if (r.deny) $.ui.toast(`cache-timer: ${field} unchanged: ${r.deny}`)
+}
+
+async function setMode($: $, mode: AutoMode) {
+  await setOption($, 'autoKeepWarm', mode === 'keep warm')
+  await setOption($, 'autoCompact', mode === 'compact')
 }
 
 // whether a request kept the main conversation's cache warm: every main-thread request does; a subagent's
@@ -66,11 +103,16 @@ export function refreshesMain(agentId: string | undefined, usage: ModelUsage, ca
 type Run = { text: string; ink: 'color' | 'fg' | 'dim' }
 
 // the countdown bar as runs of one ink: `color` the time left, `dim` the time gone,
-// `fg` (the theme's own text colour) the segment where auto-compact fires
+// `fg` (the theme's own text colour) the segment where the auto action fires
 export function bar(fraction: number, markAt: number | null): Run[] {
   const filled = Math.round(fraction * SEGMENTS)
   const cells: Run[] = Array.from({ length: SEGMENTS }, (_, i) => ({ text: '■', ink: i < filled ? 'color' : 'dim' }))
   if (markAt !== null) cells[Math.min(SEGMENTS - 1, Math.round(markAt * SEGMENTS))] = { text: '■', ink: 'fg' }
+  return runsOf(cells)
+}
+
+// consecutive cells of one ink share a Text
+function runsOf(cells: Run[]): Run[] {
   const runs: Run[] = []
   for (const c of cells) {
     const last = runs[runs.length - 1]
@@ -80,47 +122,76 @@ export function bar(fraction: number, markAt: number | null): Run[] {
   return runs
 }
 
-async function tick($: $, isAuto: boolean, lead: number) {
+// the sweep shown while Claude works: a three-segment comet running left to right, then off the end and around
+export function sweep(step: number): Run[] {
+  const head = step % (SEGMENTS + 3)
+  return runsOf(Array.from({ length: SEGMENTS }, (_, i) => ({ text: '■', ink: i <= head && i > head - 3 ? 'color' : 'dim' })))
+}
+
+// advances the sweep five times a second, only while a turn runs
+async function animate($: $) {
+  if (await read($, isRunning)) await update($, frame, n => n + 1)
+}
+
+async function tick($: $, mode: AutoMode, lead: number) {
   const t = await $.clock.now()
   await update($, now, () => t)
   const ms = await left($, t)
-  // a lead as long as the TTL would compact right after every turn
+  // a lead as long as the TTL would act right after every turn
   const isDue = ms !== null && ms > 0 && ms <= lead && lead < ttlMs(await read($, ttl))
-  if (isDue && isAuto && !(await read($, hasCompacted))) await compact($)
+  if (!isDue || isBusy || mode === 'off') return
+  isBusy = true
+  try {
+    if (mode === 'compact' && !(await read($, hasCompacted))) await compact($)
+    if (mode === 'keep warm' && (await read($, pings)) < MAX_PINGS) {
+      await update($, pings, n => n + 1)
+      await keepWarm($)
+    }
+  } finally {
+    isBusy = false
+  }
 }
 
 // settings are the plugin's userConfig (plugin.json): rows in /config, saved in settings.json
 export const register: Register = (on, options) => {
-  const isAuto = options.autoCompact === true
+  const mode: AutoMode = options.autoKeepWarm === true ? 'keep warm' : options.autoCompact === true ? 'compact' : 'off'
   const lead = Math.max(0.1, Number(options.minutesBeforeExpiry) || 5) * 60_000
   const configTtl: CacheTtl = options.ttl === '5m' ? '5m' : '1h'
+  const NEXT_MODE: Record<AutoMode, AutoMode> = { off: 'compact', compact: 'keep warm', 'keep warm': 'off' }
 
   on('session.start', async ($, e, next) => {
-    await $.command.register({ name: 'cache', description: 'Show the prompt cache band again' })
+    await $.command.register({ name: 'cache', description: 'Show or hide the prompt cache band; /cache help for more' })
     await update($, ttl, () => configTtl)
-    $.clock.every(1000, () => void tick($, isAuto, lead))
+    $.clock.every(1000, () => void tick($, mode, lead))
+    $.clock.every(200, () => void animate($))
     return next(e)
   })
 
-  // /cache toggles the band; /cache help explains the controls; the rest change settings
+  // /cache toggles the band; /cache help explains the controls; the rest act or change settings
   on('command.run', { command: 'cache' }, async ($, e) => {
     const [what = '', value = ''] = e.args.trim().toLowerCase().split(/\s+/)
     const total = ttlMs(await read($, ttl))
-    const auto = isAuto && lead < total ? `on, compacts at ${short(total - lead)}` : 'off'
+    const autoText = mode === 'off' || lead >= total ? 'off' : `${mode} at ${short(total - lead)}`
     if (what === '') {
       const isNowHidden = !(await read($, isHidden))
       await update($, isHidden, () => isNowHidden)
       return { text: isNowHidden ? 'Cache band hidden. /cache shows it.' : 'Cache band shown. /cache help lists the controls.' }
     }
-    if (what === 'auto' && (value === 'on' || value === 'off')) {
-      await setOption($, 'autoCompact', value === 'on')
-      return { text: `Auto-compact ${value}.` }
+    if (what === 'warm') {
+      await keepWarm($)
+      return { text: 'Keep warm sent.' }
+    }
+    const modes: Record<string, AutoMode> = { off: 'off', on: 'compact', compact: 'compact', warm: 'keep warm', 'keep-warm': 'keep warm' }
+    const picked = modes[value]
+    if (what === 'auto' && picked) {
+      await setMode($, picked)
+      return { text: `Auto: ${picked}.` }
     }
     const minutes = /^(\d+(?:\.\d+)?)m?$/.exec(value)
     if (what === 'auto' && minutes) {
       await setOption($, 'minutesBeforeExpiry', Number(minutes[1]))
-      await setOption($, 'autoCompact', true)
-      return { text: `Auto-compact on, ${minutes[1]} minutes before the cache expires.` }
+      if (mode === 'off') await setMode($, 'compact')
+      return { text: `Auto acts ${minutes[1]} minutes before the cache expires.` }
     }
     if (what === 'ttl' && (value === '5m' || value === '1h')) {
       await setOption($, 'ttl', value)
@@ -128,18 +199,21 @@ export const register: Register = (on, options) => {
     }
     return {
       text: [
-        `Cache band: TTL ${await read($, ttl)}, auto-compact ${auto}.`,
+        `Cache band: TTL ${await read($, ttl)}, auto ${autoText}.`,
         '',
         'On the band',
-        '  Compact          compact the conversation now',
-        '  auto off / on    click to turn auto-compact on or off',
-        '  ×                hide the band (/cache shows it again)',
+        '  Compact             summarize the conversation now; later messages send less',
+        '  Keep warm           restart the cache timer now with one tiny request; nothing is lost',
+        '  auto ...            click to cycle: off, compact, keep warm',
         '',
         'Commands',
-        '  /cache           show or hide the band',
-        '  /cache auto on   turn auto-compact on (or off)',
-        '  /cache auto 5m   compact 5 minutes before the cache expires',
-        '  /cache ttl 1h    set the cache lifetime (1h or 5m)',
+        '  /cache              show or hide the band',
+        '  /cache warm         keep the cache warm now',
+        '  /cache auto compact compact before the cache expires (also: keep-warm, off)',
+        '  /cache auto 5m      act 5 minutes before the cache expires',
+        '  /cache ttl 1h       set the cache lifetime (1h or 5m)',
+        '',
+        `Auto keep warm stops after ${MAX_PINGS} pings in a row with no message from you.`,
       ].join('\n'),
     }
   })
@@ -170,6 +244,7 @@ export const register: Register = (on, options) => {
     if (e.agentId !== undefined) return next(e)
     await update($, isRunning, () => false)
     await update($, hasCompacted, () => false)
+    await update($, pings, () => 0)
     return next(e)
   })
 
@@ -185,10 +260,15 @@ export const register: Register = (on, options) => {
     const ms = await left($, await read($, now))
     const total = ttlMs(await read($, ttl))
     const hit = await read($, hitPct)
+    const isArmed = mode !== 'off' && lead < total
 
     let label = '—'
     let color = 'gray'
-    if (e.props.isWorking) label = 'refreshing'
+    const step = await read($, frame)
+    if (e.props.isWorking) {
+      label = SPINNER[step % SPINNER.length] ?? '·'
+      color = 'green'
+    }
     else if (ms === null && (await read($, hasCompacted))) label = 'compacted'
     else if (ms !== null && ms > 0) {
       label = short(ms)
@@ -197,21 +277,7 @@ export const register: Register = (on, options) => {
       label = 'expired'
       color = 'red'
     }
-    const close = <Button key="close" label="×" plain role="dismiss" onPress={() => update($, isHidden, () => true)} />
-    const auto = (
-      <Button
-        key="auto"
-        label={isAuto && lead < total ? `auto at ${short(total - lead)}` : 'auto off'}
-        plain
-        dimColor
-        onPress={() => setOption($, 'autoCompact', !isAuto)}
-      />
-    )
-
-    const runs = bar(
-      e.props.isWorking ? 1 : Math.max(0, ms ?? 0) / total,
-      isAuto && lead < total ? lead / total : null,
-    )
+    const runs = e.props.isWorking ? sweep(step) : bar(Math.max(0, ms ?? 0) / total, isArmed ? lead / total : null)
     return (
       <Box flexDirection="row" alignItems="center" gap={1}>
         <Text color={color}>●</Text>
@@ -219,7 +285,7 @@ export const register: Register = (on, options) => {
         <Text bold color={color}>
           {label}
         </Text>
-        <Text>
+        <Text wrap="truncate">
           {runs.map((r, i) =>
             r.ink === 'color' ? (
               <Text key={i} color={color}>
@@ -234,11 +300,23 @@ export const register: Register = (on, options) => {
             ),
           )}
         </Text>
-        {hit !== null && <Text dimColor>{hit}% hit ·</Text>}
-        {auto}
+        {hit !== null && (
+          <Box flexShrink={0}>
+            <Text dimColor wrap="truncate">
+              {hit}% hit ·
+            </Text>
+          </Box>
+        )}
+        <Button
+          key="auto"
+          label={isArmed ? `auto ${mode} at ${short(total - lead)}` : 'auto off'}
+          plain
+          dimColor
+          onPress={() => setMode($, NEXT_MODE[mode])}
+        />
         <Box flexGrow={1} />
+        {ms !== null && ms > 0 && <Button key="warm" label="Keep warm" onPress={() => keepWarm($)} />}
         <Button key="compact" label="Compact" variant="primary" onPress={() => compact($)} />
-        {close}
       </Box>
     )
   })
