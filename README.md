@@ -73,23 +73,16 @@ The countdown restarts on every request that re-reads this conversation: each st
 
 ## Install
 
-Load a mod in every session, desktop app included, from `~/.claude/settings.json`:
+This repo is a plugin marketplace. In Claude Code:
 
-```json
-{
-  "env": {
-    "CLAUDE_CODE_PLUGIN_DIRS": "~/code/claude-mods/cache-timer"
-  }
-}
+```
+/plugin marketplace add rmkr/claude-mods
+/plugin install cache-timer@claude-mods
 ```
 
-Separate several folders with `:`. Start a new session, or run `/reload-plugins`, to pick up changes.
+The repo is private, so this uses your GitHub access (SSH or `gh`). Once installed, cache-timer shows in `/plugin` with its settings, and `/plugin` updates it from GitHub.
 
-Or load it for one terminal session:
-
-```bash
-claude --plugin-dir ~/code/claude-mods/cache-timer
-```
+To work on a mod instead, load it from its folder: add the folder to `CLAUDE_CODE_PLUGIN_DIRS` in `~/.claude/settings.json` (every session, desktop app included) or run `claude --plugin-dir ~/code/claude-mods/cache-timer` (one terminal session). Don't load it both ways at once.
 
 ## Developing
 
