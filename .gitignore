@@ -1,0 +1,4 @@
+.DS_Store
+node_modules/
+# engine-generated types (/plugin-types)
+.claude/types/
