@@ -4,7 +4,7 @@ declare module 'claude-code' {
   interface PluginState {
     'cache-timer': {
       lastAt: number | null
-      tokens: number
+      hitPct: number | null
       ttl: CacheTtl
       isAuto: boolean
       leadSec: number

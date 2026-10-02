@@ -8,11 +8,11 @@ Mods for Claude Code: plugins of function hooks that add panes, status line entr
 
 Shows how long until the prompt cache expires, so you can compact before the next message has to re-send the whole conversation uncached.
 
-- **Band above the prompt**, shown by default: a countdown to expiry and how many tokens are warm. Green while there's time, yellow near auto-compact, red once expired. `Close` hides it; `/cache` brings it back.
+- **Band above the prompt**: `● cache 3:42 ■■■■■■□□□□ 98% hit [Compact] [×]`. Time left, a bar of the TTL remaining, and the last turn's cache hit rate. Green while there's time, yellow near auto-compact, red once expired. `×` hides it; `/cache` brings it back.
 - **Status line**: `cache 3:42`, or `cache cold` once expired.
 - **Compact**: compacts immediately (not while a turn is running).
-- **Auto-compact**: compacts on its own a set time before expiry (default 30s, adjust in 15s steps), at most once per idle stretch.
-- **TTL 5m / 1h**: starts at 5m; corrects itself from the engine after the first compaction.
+- **Auto-compact**: `/cache auto on 30` compacts on its own 30s before expiry, at most once per idle stretch. `/cache auto off` stops it.
+- **TTL**: `/cache ttl 1h` or `/cache ttl 5m`. Starts at 5m and corrects itself from the engine after the first compaction.
 
 The countdown starts when each turn ends. Settings last for the current session only.
 

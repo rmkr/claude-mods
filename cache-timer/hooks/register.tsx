@@ -4,7 +4,7 @@ import type { EngineInterface as $, Register } from 'claude-code'
 import type { CacheTtl } from '../types'
 
 const lastAt = atom({ plugin: 'cache-timer', key: 'lastAt' } as const, null as number | null)
-const tokens = atom({ plugin: 'cache-timer', key: 'tokens' } as const, 0)
+const hitPct = atom({ plugin: 'cache-timer', key: 'hitPct' } as const, null as number | null)
 const ttl = atom({ plugin: 'cache-timer', key: 'ttl' } as const, '5m' as CacheTtl)
 const isAuto = atom({ plugin: 'cache-timer', key: 'isAuto' } as const, false)
 const leadSec = atom({ plugin: 'cache-timer', key: 'leadSec' } as const, 30)
@@ -18,7 +18,9 @@ const clock = (ms: number) => {
   const s = Math.floor(ms / 1000)
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
 }
-const kTokens = (n: number) => (n >= 1000 ? `${Math.round(n / 1000)}k` : String(n))
+// m:ss under ten minutes, whole minutes above (a 1h TTL reads as "44m")
+const short = (ms: number) => (ms < 600_000 ? clock(ms) : `${Math.ceil(ms / 60_000)}m`)
+const SEGMENTS = 24
 
 // ms left before the cache lapses; null when there is nothing cached to lose
 async function left($: $, t: number) {
@@ -61,9 +63,18 @@ export const register: Register = on => {
     return next(e)
   })
 
-  on('command.run', { command: 'cache' }, async $ => {
+  // /cache shows the band; /cache ttl 5m|1h; /cache auto on|off [seconds]
+  on('command.run', { command: 'cache' }, async ($, e) => {
+    const [what, value, seconds] = e.args.trim().split(/\s+/)
+    if (what === 'ttl' && (value === '5m' || value === '1h')) await update($, ttl, () => value)
+    else if (what === 'auto' && (value === 'on' || value === 'off')) {
+      await update($, isAuto, () => value === 'on')
+      const n = Number(seconds)
+      if (Number.isFinite(n) && n >= 5) await update($, leadSec, () => Math.round(n))
+    } else if (what) return { text: 'Usage: /cache [ttl 5m|1h] [auto on|off [seconds]]' }
     await update($, isHidden, () => false)
-    return { text: 'Prompt cache band shown.' }
+    const auto = (await read($, isAuto)) ? `on, ${await read($, leadSec)}s before expiry` : 'off'
+    return { text: `Cache band shown. TTL ${await read($, ttl)}, auto-compact ${auto}.` }
   })
 
   on('turn.start', async ($, e, next) => {
@@ -74,9 +85,10 @@ export const register: Register = on => {
   on('turn.complete', async ($, e, next) => {
     if (e.agentId !== undefined) return next(e)
     const t = await $.clock.now()
-    const { context } = await $.session.usage()
+    const u = e.usage
+    const sent = u ? u.input_tokens + u.cache_read_input_tokens + u.cache_creation_input_tokens : 0
     await update($, lastAt, () => t)
-    await update($, tokens, () => context.tokens ?? 0)
+    await update($, hitPct, v => (u && sent > 0 ? Math.round((u.cache_read_input_tokens / sent) * 100) : v))
     await update($, isRunning, () => false)
     await update($, hasCompacted, () => false)
     return next(e)
@@ -92,37 +104,40 @@ export const register: Register = on => {
     if (e.props.hasSurvey || (await read($, isHidden))) return next(e)
     const { Box, Text, Button } = $.ui.resolve(e)
     const ms = await left($, await read($, now))
-    const size = kTokens(await read($, tokens))
-    const lead = await read($, leadSec)
+    const lead = (await read($, leadSec)) * 1000
+    const total = ttlMs(await read($, ttl))
+    const hit = await read($, hitPct)
+    const auto = await read($, isAuto)
 
-    let line = 'Cache: no request yet'
+    let label = '—'
     let color = 'gray'
-    if (e.props.isWorking) line = 'Cache: refreshing'
-    else if (ms === null && (await read($, hasCompacted))) line = 'Cache: compacted, rebuilds on next message'
+    if (e.props.isWorking) label = 'refreshing'
+    else if (ms === null && (await read($, hasCompacted))) label = 'compacted'
     else if (ms !== null && ms > 0) {
-      line = `Cache ${clock(ms)} left · ${size} warm`
-      color = ms > lead * 1000 + 30_000 ? 'green' : 'yellow'
+      label = short(ms)
+      color = ms > lead + 30_000 ? 'green' : 'yellow'
     } else if (ms !== null) {
-      line = `Cache expired ${clock(-ms)} ago · next message re-sends ${size}`
+      label = 'expired'
       color = 'red'
     }
+    const filled = e.props.isWorking ? SEGMENTS : Math.round((Math.max(0, ms ?? 0) / total) * SEGMENTS)
 
     return (
-      <Box flexDirection="row" gap={1} flexWrap="wrap">
+      <Box flexDirection="row" alignItems="center" gap={1}>
+        <Text color={color}>●</Text>
+        <Text dimColor>cache</Text>
         <Text bold color={color}>
-          {line}
+          {label}
         </Text>
-        <Button key="compact" label="Compact" variant="primary" onPress={() => compact($)} />
-        <Button key="ttl" label={`TTL ${await read($, ttl)}`} onPress={() => update($, ttl, v => (v === '5m' ? '1h' : '5m'))} />
-        <Button
-          key="auto"
-          label={`Auto: ${(await read($, isAuto)) ? 'on' : 'off'}`}
-          onPress={() => update($, isAuto, v => !v)}
-        />
-        <Button key="less" label="-15s" onPress={() => update($, leadSec, v => Math.max(15, v - 15))} />
-        <Text dimColor>{lead}s before</Text>
-        <Button key="more" label="+15s" onPress={() => update($, leadSec, v => Math.min(600, v + 15))} />
-        <Button key="close" label="Close" role="dismiss" onPress={() => update($, isHidden, () => true)} />
+        <Text>
+          <Text color={color}>{'■'.repeat(filled)}</Text>
+          <Text dimColor>{'■'.repeat(SEGMENTS - filled)}</Text>
+        </Text>
+        {hit !== null && <Text dimColor>{hit}% hit</Text>}
+        {auto && <Text dimColor>auto {lead / 1000}s</Text>}
+        <Box flexGrow={1} />
+        <Button key="compact" label="Compact" onPress={() => compact($)} />
+        <Button key="close" label="×" role="dismiss" onPress={() => update($, isHidden, () => true)} />
       </Box>
     )
   })
