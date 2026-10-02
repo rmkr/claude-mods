@@ -1,0 +1,1 @@
+{ "name": "cache-timer", "version": "0.1.0", "description": "Prompt cache countdown with compact and auto-compact before it expires", "types": "./types/index.d.ts" }
