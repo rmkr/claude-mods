@@ -10,6 +10,7 @@ declare module 'claude-code' {
       ttl: CacheTtl
       isRunning: boolean
       hasCompacted: boolean
+      hasWarned: boolean
       pings: number
       isCollapsed: boolean
       isHidden: boolean

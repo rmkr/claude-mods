@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { bar, segmentsFor, shownLeft, sweep } from '../hooks/bars'
+import { bar, nextAction, segmentsFor, shownLeft, sweep } from '../hooks/bars'
 import { refreshesMain } from '../hooks/register'
 
 const BAND = { component: 'AbovePrompt', props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 100 } } as const
@@ -79,4 +79,16 @@ test('the shown time moves in whole minutes until the last minute, so the band r
   expect(shownLeft(44 * 60_000)).toBe(44 * 60_000)
   expect(shownLeft(59_500)).toBe(60_000)
   expect(shownLeft(12_300)).toBe(13_000)
+})
+
+test('before expiry: the auto action, a reminder when there is none, and compact waits for background work', async () => {
+  const at = { isBackground: false, hasCompacted: false, pings: 0, maxPings: 3, hasWarned: false }
+  expect(nextAction({ ...at, mode: 'off' })).toBe('warn')
+  expect(nextAction({ ...at, mode: 'off', hasWarned: true })).toBe('none')
+  expect(nextAction({ ...at, mode: 'compact' })).toBe('compact')
+  expect(nextAction({ ...at, mode: 'compact', isBackground: true })).toBe('warn')
+  expect(nextAction({ ...at, mode: 'compact', hasCompacted: true })).toBe('none')
+  expect(nextAction({ ...at, mode: 'keep warm' })).toBe('keep warm')
+  expect(nextAction({ ...at, mode: 'keep warm', pings: 3 })).toBe('none')
+  expect(nextAction({ ...at, mode: 'keep warm', pings: 3, isBackground: true })).toBe('keep warm')
 })

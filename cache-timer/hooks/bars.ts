@@ -52,3 +52,22 @@ export const label = (shown: number) => (shown >= 60_000 ? `${shown / 60_000}m` 
 export function segmentsFor(columns: number, used: number): number {
   return Math.max(8, Math.min(SEGMENTS, columns - used))
 }
+
+export type CacheAction = 'compact' | 'keep warm' | 'warn' | 'none'
+
+// what to do once the cache is close to expiring: the auto action, or a reminder when there is none to take.
+// Compacting waits while a background agent runs (its report back expects the full conversation); keeping warm
+// does not, since that report would otherwise land on an expired cache
+export function nextAction(s: {
+  mode: 'off' | 'compact' | 'keep warm'
+  isBackground: boolean
+  hasCompacted: boolean
+  pings: number
+  maxPings: number
+  hasWarned: boolean
+}): CacheAction {
+  if (s.mode === 'keep warm' && (s.isBackground || s.pings < s.maxPings)) return 'keep warm'
+  if (s.mode === 'compact' && !s.isBackground && !s.hasCompacted) return 'compact'
+  if (s.mode === 'keep warm' || s.hasCompacted) return 'none'
+  return s.hasWarned ? 'none' : 'warn'
+}

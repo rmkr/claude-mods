@@ -30,7 +30,9 @@ While Claude is working, a spinner replaces the time, a highlight sweeps across 
 
 - **Short break, want to come back to the same context:** click **Keep warm**, or set auto to keep warm so it happens for you 5 minutes before expiry.
 - **Long break, or the conversation has grown large:** click **Compact**, or set auto to compact. The next message then sends only the summary.
-- **Leaving for the day:** do nothing. Auto keep warm stops after 3 pings with no message from you, so an idle session doesn't keep spending.
+- **Auto off:** a reminder pops up 5 minutes before the cache expires, so you can choose then.
+- **Background agent still working:** auto-compact waits for it, so its report back finds the full conversation, and you get the reminder instead. Auto keep warm still fires.
+- **Leaving for the day:** do nothing. Auto keep warm stops after 3 pings with no message from you (pings while a background agent works don't count), so an idle session doesn't keep spending.
 - **Band in the way:** click `–` to collapse it, or type `/cache` to hide it completely. Type `/cache` again to bring it back.
 
 ### Controls
@@ -53,7 +55,7 @@ Settings persist across sessions. Change them with the band and `/cache` command
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
-| Auto-compact | off | Compact before the cache expires, at most once per idle stretch |
+| Auto-compact | off | Compact before the cache expires, at most once per idle stretch; waits while a background agent runs |
 | Auto keep warm | off | Keep the cache warm before it expires instead; wins over auto-compact if both are on |
 | Minutes before expiry | 5 | When the auto action runs (5 = 55 minutes into a 1h cache) |
 | Cache TTL | 1h | How long the cache lives; corrects itself after a compaction reports the real value |

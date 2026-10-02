@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface as $, ModelUsage, Register } from 'claude-code'
 
 import type { AutoMode, CacheTtl } from '../types'
-import { bar, label, segmentsFor, short, shownLeft, SPINNER, sweep } from './bars'
+import { bar, label, nextAction, segmentsFor, short, shownLeft, SPINNER, sweep } from './bars'
 
 const lastAt = atom({ plugin: 'cache-timer', key: 'lastAt' } as const, null as number | null)
 const cachedTokens = atom({ plugin: 'cache-timer', key: 'cachedTokens' } as const, 0)
@@ -10,6 +10,7 @@ const hitPct = atom({ plugin: 'cache-timer', key: 'hitPct' } as const, null as n
 const ttl = atom({ plugin: 'cache-timer', key: 'ttl' } as const, '1h' as CacheTtl)
 const isRunning = atom({ plugin: 'cache-timer', key: 'isRunning' } as const, false)
 const hasCompacted = atom({ plugin: 'cache-timer', key: 'hasCompacted' } as const, false)
+const hasWarned = atom({ plugin: 'cache-timer', key: 'hasWarned' } as const, false)
 const pings = atom({ plugin: 'cache-timer', key: 'pings' } as const, 0)
 const isCollapsed = atom({ plugin: 'cache-timer', key: 'isCollapsed' } as const, false)
 const isHidden = atom({ plugin: 'cache-timer', key: 'isHidden' } as const, false)
@@ -65,6 +66,7 @@ async function keepWarm($: $) {
   if ('usage' in r && r.usage) {
     const t = await $.clock.now()
     await update($, lastAt, () => t)
+    await update($, hasWarned, () => false)
     const wasWarm = r.usage.cache_read_input_tokens >= (await read($, cachedTokens)) * 0.9
     $.ui.toast(wasWarm ? 'Cache kept warm' : 'Cache had expired; it was written again')
     return
@@ -99,6 +101,11 @@ async function animate($: $) {
   if (await read($, isRunning)) await update($, frame, n => n + 1)
 }
 
+// a subagent still running in the background: its report back will land on this conversation
+async function hasBackgroundWork($: $) {
+  return (await $.agent.list()).some(a => a.status === 'running')
+}
+
 async function tick($: $, lead: number) {
   const mode = await read($, autoMode)
   const t = await $.clock.now()
@@ -109,13 +116,28 @@ async function tick($: $, lead: number) {
   if ((await read($, shown)) !== next) await update($, shown, () => next)
   // a lead as long as the TTL would act right after every turn
   const isDue = ms !== null && ms > 0 && ms <= lead && lead < ttlMs(await read($, ttl))
-  if (!isDue || isBusy || mode === 'off') return
+  if (!isDue || isBusy) return
   isBusy = true
   try {
-    if (mode === 'compact' && !(await read($, hasCompacted))) await compact($)
-    if (mode === 'keep warm' && (await read($, pings)) < MAX_PINGS) {
-      await update($, pings, n => n + 1)
+    const isBackground = await hasBackgroundWork($)
+    const action = nextAction({
+      mode,
+      isBackground,
+      hasCompacted: await read($, hasCompacted),
+      pings: await read($, pings),
+      maxPings: MAX_PINGS,
+      hasWarned: await read($, hasWarned),
+    })
+    if (action === 'compact') await compact($)
+    if (action === 'keep warm') {
+      // pings count only an idle stretch; a background agent at work is not one
+      if (!isBackground) await update($, pings, n => n + 1)
       await keepWarm($)
+    }
+    if (action === 'warn') {
+      await update($, hasWarned, () => true)
+      const why = mode === 'compact' ? ' Auto-compact is waiting for background work.' : ''
+      $.ui.toast(`Cache expires in ${label(next ?? 0)}.${why} Keep warm or Compact on the band.`, { timeoutMs: 15_000 })
     }
   } finally {
     isBusy = false
@@ -194,6 +216,9 @@ export const register: Register = (on, options) => {
         '  /cache auto 5m      act 5 minutes before the cache expires',
         '  /cache ttl 1h       set the cache lifetime (1h or 5m)',
         '',
+        'With auto off you get a reminder before the cache expires. Auto-compact waits while a background agent',
+        'runs, so its report back finds the full conversation; keep warm still fires.',
+        '',
         `Auto keep warm stops after ${MAX_PINGS} pings in a row with no message from you.`,
       ].join('\n'),
     }
@@ -212,6 +237,7 @@ export const register: Register = (on, options) => {
     if (u && refreshesMain(e.agentId, u, await read($, cachedTokens))) {
       const t = await $.clock.now()
       await update($, lastAt, () => t)
+      await update($, hasWarned, () => false)
       if (e.agentId === undefined) {
         const sent = u.input_tokens + u.cache_read_input_tokens + u.cache_creation_input_tokens
         await update($, cachedTokens, () => u.cache_read_input_tokens + u.cache_creation_input_tokens)
