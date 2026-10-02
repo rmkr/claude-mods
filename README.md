@@ -16,12 +16,12 @@ The band sits above the chat box:
 
 | Part | Meaning |
 | --- | --- |
-| `●` and the time | Time left before the cache expires. Whole minutes, then seconds in the last minute. Green while there's time, yellow near the auto action, red once expired. Click the time to shrink the band to `● 44m`; click it again to open it. |
+| `●` and the time | Time left before the cache expires. Whole minutes, then seconds in the last minute. Green while there's time, yellow near the auto action, red once expired. Click the time to shrink the band to `● 44m`; click it again to open it. A narrow window gets the small view on its own. |
 | Bar | The same countdown as a bar. One segment in your text colour marks where the auto action fires. |
 | `98%` | How much of the last turn's input came from the cache. |
-| `auto …` | What happens automatically before expiry: `auto off`, `auto compact 55m` or `auto warm 55m`. |
+| `auto …` | What happens automatically before expiry: `auto off`, `auto compact 55m` or `auto warm 55m`. Click to cycle off → compact → keep warm. |
 | `Keep warm` | Restarts the cache timer with one tiny request. Nothing is summarized or lost. Shown only while the cache is still warm. |
-| `Compact` | Summarizes the conversation now, so later messages send less. |
+| `Compact` | Summarizes the conversation now, so later messages send less. Shown once there's a conversation to compact; in the desktop app it sends `/compact` for you. |
 | `×` | Hides the band. Type `/cache` to bring it back. |
 
 While Claude is working the band shows `live` with a full bar, since every step refreshes the cache. Compact and Keep warm come back when the turn ends. The countdown starts when the first reply finishes.
@@ -35,14 +35,10 @@ While Claude is working the band shows `live` with a full bar, since every step 
 - **Leaving for the day:** do nothing. Auto keep warm stops after 3 pings with no message from you (pings while a background agent works don't count), so an idle session doesn't keep spending.
 - **Band in the way:** click the time to shrink it, or click `×` (or type `/cache`) to hide it. Type `/cache` to bring it back.
 
-### Controls
+### Commands
 
-| Click or type | What it does |
+| Type | What it does |
 | --- | --- |
-| `auto …` on the band | Cycle the auto action: off → compact → keep warm |
-| `Keep warm` / `Compact` | Act now |
-| The time | Shrink the band to `● 44m`, or open it again |
-| `×` | Hide the band |
 | `/cache` | Show or hide the band (runs at once, even mid-turn) |
 | `/cache help` | List the controls and current settings in the session |
 | `/cache warm` | Keep the cache warm now |

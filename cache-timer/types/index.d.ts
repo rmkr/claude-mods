@@ -15,6 +15,7 @@ declare module 'claude-code' {
       isCollapsed: boolean
       isHidden: boolean
       shown: number | null
+      widthCheck: number
       autoMode: AutoMode
     }
   }

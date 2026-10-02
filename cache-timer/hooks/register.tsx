@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface as $, ModelUsage, Register } from 'claude-code'
 
 import type { AutoMode, CacheTtl } from '../types'
-import { bar, label, nextAction, segmentsFor, short, shownLeft } from './bars'
+import { bar, label, nextAction, segmentsFor, shownLeft } from './bars'
 
 const lastAt = atom({ plugin: 'cache-timer', key: 'lastAt' } as const, null as number | null)
 const cachedTokens = atom({ plugin: 'cache-timer', key: 'cachedTokens' } as const, 0)
@@ -15,8 +15,8 @@ const pings = atom({ plugin: 'cache-timer', key: 'pings' } as const, 0)
 const isCollapsed = atom({ plugin: 'cache-timer', key: 'isCollapsed' } as const, false)
 const isHidden = atom({ plugin: 'cache-timer', key: 'isHidden' } as const, false)
 const shown = atom({ plugin: 'cache-timer', key: 'shown' } as const, null as number | null)
+const widthCheck = atom({ plugin: 'cache-timer', key: 'widthCheck' } as const, 0)
 const autoMode = atom({ plugin: 'cache-timer', key: 'autoMode' } as const, 'off' as AutoMode)
-
 
 const ttlMs = (t: CacheTtl) => (t === '1h' ? 3_600_000 : 300_000)
 // ponytail: auto keep-warm stops after 3 pings with nobody typing, so a session left overnight lets its cache go;
@@ -24,6 +24,9 @@ const ttlMs = (t: CacheTtl) => (t === '1h' ? 3_600_000 : 300_000)
 const MAX_PINGS = 3
 // one cache action at a time; a reload starts it over
 let isBusy = false
+// the band last drew its forced small view: the desktop app reports a new width only when the band redraws, so
+// while it is narrow the tick redraws it every few seconds to notice room to grow (no buttons there to miss clicks)
+let isNarrowShown = false
 
 // ms left before the cache lapses; null when there is nothing cached to lose
 async function left($: $, t: number) {
@@ -31,11 +34,15 @@ async function left($: $, t: number) {
   return last === null || (await read($, isRunning)) ? null : last + ttlMs(await read($, ttl)) - t
 }
 
+// compact and keep warm both need the conversation at rest
+async function refuseMidTurn($: $, what: string) {
+  const busy = await read($, isRunning)
+  if (busy) $.ui.toast(`Cannot ${what} while a turn is running`)
+  return busy
+}
+
 async function compact($: $) {
-  if (await read($, isRunning)) {
-    $.ui.toast('Cannot compact while a turn is running')
-    return
-  }
+  if (await refuseMidTurn($, 'compact')) return
   await update($, hasCompacted, () => true)
   try {
     const r = await $.session.compact()
@@ -45,18 +52,17 @@ async function compact($: $) {
     }
     await update($, lastAt, () => null)
     $.ui.toast('Compacted')
-  } catch (err) {
-    $.ui.toast(`Compact failed: ${err instanceof Error ? err.message : String(err)}`)
+  } catch {
+    // the desktop app and other SDK hosts compact only inside a turn: send /compact as if typed
+    void $.prompt.submit({ text: '/compact' })
+    $.ui.toast('Compacting')
   }
 }
 
 // one tiny request over the conversation as the main thread last sent it: the API serves that prefix from the
 // cache, which restarts its timer; the reply itself is thrown away
 async function keepWarm($: $) {
-  if (await read($, isRunning)) {
-    $.ui.toast('Cannot keep warm while a turn is running')
-    return
-  }
+  if (await refuseMidTurn($, 'keep warm')) return
   const r = await $.model.fork({ prompt: 'Reply with the single word OK.' })
   if (!r.isAnswered && r.reason === 'nothing-to-fork') {
     $.ui.toast('Nothing cached yet')
@@ -95,11 +101,6 @@ export function refreshesMain(agentId: string | undefined, usage: ModelUsage, ca
   return agentId === undefined || (cached > 0 && usage.cache_read_input_tokens >= cached * 0.9)
 }
 
-// a subagent still running in the background: its report back will land on this conversation
-async function hasBackgroundWork($: $) {
-  return (await $.agent.list()).some(a => a.status === 'running')
-}
-
 async function tick($: $, lead: number) {
   const mode = await read($, autoMode)
   const t = await $.clock.now()
@@ -108,12 +109,14 @@ async function tick($: $, lead: number) {
   // click that lands on an old one is lost
   const next = shownLeft(ms)
   if ((await read($, shown)) !== next) await update($, shown, () => next)
+  if (isNarrowShown && Math.floor(t / 1000) % 3 === 0) await update($, widthCheck, n => n + 1)
   // a lead as long as the TTL would act right after every turn
   const isDue = ms !== null && ms > 0 && ms <= lead && lead < ttlMs(await read($, ttl))
   if (!isDue || isBusy) return
   isBusy = true
   try {
-    const isBackground = await hasBackgroundWork($)
+    // a subagent still running in the background: its report back will land on this conversation
+    const isBackground = (await $.agent.list()).some(a => a.status === 'running')
     const action = nextAction({
       mode,
       isBackground,
@@ -162,7 +165,7 @@ export const register: Register = (on, options) => {
     const [what = '', value = ''] = e.args.trim().toLowerCase().split(/\s+/)
     const total = ttlMs(await read($, ttl))
     const mode = await read($, autoMode)
-    const autoText = mode === 'off' || lead >= total ? 'off' : `${mode} at ${short(total - lead)}`
+    const autoText = mode === 'off' || lead >= total ? 'off' : `${mode} at ${label(total - lead)}`
     if (what === '') {
       const isNowHidden = !(await read($, isHidden))
       await update($, isHidden, () => isNowHidden)
@@ -172,7 +175,7 @@ export const register: Register = (on, options) => {
       await keepWarm($)
       return { text: 'Keep warm sent.' }
     }
-    const modes: Record<string, AutoMode> = { off: 'off', on: 'compact', compact: 'compact', warm: 'keep warm', 'keep-warm': 'keep warm' }
+    const modes: Record<string, AutoMode> = { off: 'off', compact: 'compact', 'keep-warm': 'keep warm' }
     const picked = modes[value]
     if (what === 'auto' && picked) {
       await update($, autoMode, () => picked)
@@ -315,19 +318,26 @@ export const register: Register = (on, options) => {
       color = 'red'
     }
     const isWarm = remaining !== null && remaining > 0
+    // compact needs a conversation at rest: nothing cached yet (—) or just compacted leaves nothing to compact
+    const canCompact = remaining !== null && !working
 
-    if (await read($, isCollapsed)) {
+    const hitText = hit === null ? null : `${hit}%`
+    const autoText = isArmed ? `auto ${mode === 'keep warm' ? 'warm' : mode} ${label(total - lead)}` : 'auto off'
+    const used =
+      2 + 6 + text.length + 1 + (hitText ? hitText.length + 1 : 0) + autoText.length + 1 + (isWarm && !working ? 14 : 0) + (canCompact ? 12 : 0) + 4
+    // the compact view: chosen by clicking the time, or forced when the band is too narrow for the full row and
+    // a bar of at least 8 segments; a forced one has nothing to open, so its time is plain text
+    const isCollapsedByUser = await read($, isCollapsed)
+    await read($, widthCheck)
+    isNarrowShown = !isCollapsedByUser && e.props.bodyColumns < used + 8
+    if (isCollapsedByUser || isNarrowShown) {
       return (
         <Box flexDirection="row" alignItems="center" gap={1}>
           <Text color={color}>●</Text>
-          <Button key="expand" label={text} plain onPress={press} />
+          {isCollapsedByUser ? <Button key="expand" label={text} plain onPress={press} /> : <Text bold color={color}>{text}</Text>}
         </Box>
       )
     }
-    const hitText = hit === null ? null : `${hit}%`
-    const autoText = isArmed ? `auto ${mode === 'keep warm' ? 'warm' : mode} ${short(total - lead)}` : 'auto off'
-    const used =
-      2 + 6 + text.length + 1 + (hitText ? hitText.length + 1 : 0) + autoText.length + 1 + (isWarm && !working ? 14 : 0) + (working ? 0 : 12) + 4
     const n = segmentsFor(e.props.bodyColumns, used)
     const runs = bar(working ? 1 : Math.max(0, remaining ?? 0) / total, isArmed ? lead / total : null, n)
     return (
@@ -355,7 +365,7 @@ export const register: Register = (on, options) => {
         <Button key="auto" label={autoText} plain dimColor onPress={press} />
         <Box flexGrow={1} />
         {isWarm && !working && <Button key="warm" label="Keep warm" onPress={press} />}
-        {!working && <Button key="compact" label="Compact" variant="primary" onPress={press} />}
+        {canCompact && <Button key="compact" label="Compact" variant="primary" onPress={press} />}
         <Button key="close" label="×" plain role="dismiss" onPress={press} />
       </Box>
     )

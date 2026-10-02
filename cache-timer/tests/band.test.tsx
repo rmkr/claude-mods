@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { bar, nextAction, segmentsFor, shownLeft } from '../hooks/bars'
+import { bar, label, nextAction, segmentsFor, shownLeft } from '../hooks/bars'
 import { refreshesMain } from '../hooks/register'
 
 const BAND = { component: 'AbovePrompt', props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 100 } } as const
@@ -14,20 +14,22 @@ for (const surface of ['terminal', 'desktop'] as const) {
       return <Box />
     })
     const ui = await $.ui.mount({ plugin: 'cache-timer', surface, ...BAND })
-    expect(await ui.find({ key: 'compact' })).toBeDefined()
+    // nothing cached yet: nothing to compact or keep warm
+    expect(await ui.find({ key: 'compact' })).toBeUndefined()
+    expect(await ui.find({ key: 'warm' })).toBeUndefined()
     expect(await ui.find({ key: 'auto' })).toBeDefined()
     await ui.press({ key: 'time' })
-    expect(await ui.find({ key: 'compact' })).toBeUndefined()
+    expect(await ui.find({ key: 'auto' })).toBeUndefined()
     await ui.press({ key: 'expand' })
-    expect(await ui.find({ key: 'compact' })).toBeDefined()
+    expect(await ui.find({ key: 'auto' })).toBeDefined()
     await ui.press({ key: 'close' })
-    expect(await ui.find({ key: 'compact' })).toBeUndefined()
+    expect(await ui.find({ key: 'auto' })).toBeUndefined()
     await $.command.run({ command: 'cache', args: '' })
-    expect(await ui.find({ key: 'compact' })).toBeDefined()
+    expect(await ui.find({ key: 'auto' })).toBeDefined()
     await $.command.run({ command: 'cache', args: '' })
-    expect(await ui.find({ key: 'compact' })).toBeUndefined()
+    expect(await ui.find({ key: 'auto' })).toBeUndefined()
     await $.command.run({ command: 'cache', args: '' })
-    expect(await ui.find({ key: 'compact' })).toBeDefined()
+    expect(await ui.find({ key: 'auto' })).toBeDefined()
     await ui.unmount()
   })
 }
@@ -73,6 +75,8 @@ test('the shown time moves in whole minutes until the last minute, so the band r
   expect(shownLeft(44 * 60_000)).toBe(44 * 60_000)
   expect(shownLeft(59_500)).toBe(60_000)
   expect(shownLeft(12_300)).toBe(13_000)
+  expect(label(57.5 * 60_000)).toBe('58m')
+  expect(label(13_000)).toBe('13s')
 })
 
 test('before expiry: the auto action, a reminder when there is none, and compact waits for background work', async () => {
@@ -86,3 +90,14 @@ test('before expiry: the auto action, a reminder when there is none, and compact
   expect(nextAction({ ...at, mode: 'keep warm', pings: 3 })).toBe('none')
   expect(nextAction({ ...at, mode: 'keep warm', pings: 3, isBackground: true })).toBe('keep warm')
 })
+
+for (const surface of ['terminal', 'desktop'] as const) {
+  test(`a band too narrow for the full row draws the compact view on ${surface}`, async $ => {
+    const ui = await $.ui.mount({ plugin: 'cache-timer', surface, ...BAND, props: { ...BAND.props, bodyColumns: 30 } })
+    expect(await ui.find({ key: 'auto' })).toBeUndefined()
+    expect(await ui.find({ type: 'Text', text: '●' })).toBeDefined()
+    await ui.redraw({ ...BAND.props, bodyColumns: 120 })
+    expect(await ui.find({ key: 'auto' })).toBeDefined()
+    await ui.unmount()
+  })
+}

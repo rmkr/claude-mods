@@ -1,15 +1,10 @@
 // what the band draws: pure helpers, kept apart so the tests reach them without the hooks
 
-export const SEGMENTS = 24
+import type { AutoMode } from '../types'
 
-export const clock = (ms: number) => {
-  const s = Math.floor(ms / 1000)
-  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
-}
-// m:ss under ten minutes, whole minutes above (a 1h TTL reads as "44m")
-export const short = (ms: number) => (ms < 600_000 ? clock(ms) : `${Math.ceil(ms / 60_000)}m`)
+const SEGMENTS = 24
 
-export type Run = { text: string; ink: 'color' | 'fg' | 'dim' }
+type Run = { text: string; ink: 'color' | 'fg' | 'dim' }
 
 // the countdown bar as runs of one ink: `color` the time left, `dim` the time gone,
 // `fg` (the theme's own text colour) the segment where the auto action fires
@@ -39,20 +34,20 @@ export function shownLeft(ms: number | null): number | null {
   return ms > 60_000 ? Math.ceil(ms / 60_000) * 60_000 : Math.ceil(ms / 1000) * 1000
 }
 
-export const label = (shown: number) => (shown >= 60_000 ? `${shown / 60_000}m` : `${shown / 1000}s`)
+export const label = (ms: number) => (ms >= 60_000 ? `${Math.round(ms / 60_000)}m` : `${Math.round(ms / 1000)}s`)
 
 // the bar takes what the row leaves after `used` cells of other items, from 8 to 24 segments
 export function segmentsFor(columns: number, used: number): number {
   return Math.max(8, Math.min(SEGMENTS, columns - used))
 }
 
-export type CacheAction = 'compact' | 'keep warm' | 'warn' | 'none'
+type CacheAction = 'compact' | 'keep warm' | 'warn' | 'none'
 
 // what to do once the cache is close to expiring: the auto action, or a reminder when there is none to take.
 // Compacting waits while a background agent runs (its report back expects the full conversation); keeping warm
 // does not, since that report would otherwise land on an expired cache
 export function nextAction(s: {
-  mode: 'off' | 'compact' | 'keep warm'
+  mode: AutoMode
   isBackground: boolean
   hasCompacted: boolean
   pings: number
