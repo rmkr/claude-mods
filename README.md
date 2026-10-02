@@ -8,13 +8,13 @@ Mods for Claude Code: plugins of function hooks that add panes, status line entr
 
 Shows how long until the prompt cache expires, so you can compact before the next message has to re-send the whole conversation uncached.
 
-- **Band above the prompt**: `● cache 3:42 ■■■■■■□□□□ 98% hit [Compact] [×]`. Time left, a bar of the TTL remaining, and the last turn's cache hit rate. Green while there's time, yellow near auto-compact, red once expired. `×` hides it; `/cache` brings it back.
+- **Line above the prompt**: `● cache 44m · 98% hit · auto at 55m · Compact ×`, right-aligned and muted. Time left, the last turn's cache hit rate, and when auto-compact fires. Green while there's time, yellow near auto-compact, red once expired. `×` hides it; `/cache` brings it back. Set **Band style** to `meter` in `/config` for a card with a segmented countdown bar instead.
 - **Status line**: `cache 3:42`, or `cache cold` once expired.
 - **Compact**: compacts immediately (not while a turn is running).
-- **Auto-compact**: `/cache auto on 30` compacts on its own 30s before expiry, at most once per idle stretch. `/cache auto off` stops it.
-- **TTL**: `/cache ttl 1h` or `/cache ttl 5m`. Starts at 5m and corrects itself from the engine after the first compaction.
+- **Auto-compact**: off by default. Turn it on in `/config` (cache-timer rows) and it compacts 5 minutes before expiry, 55 minutes into a 1h cache, at most once per idle stretch. The minutes are configurable there too.
+- **TTL**: 1h by default, set in `/config`. It also corrects itself for the session after a compaction.
 
-The countdown starts when each turn ends. Settings last for the current session only.
+Settings are the plugin's `userConfig`, saved in `settings.json` under `pluginConfigs`. `/cache` prints the current values. The countdown starts when each turn ends.
 
 ## Install
 

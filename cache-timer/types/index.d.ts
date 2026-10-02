@@ -6,8 +6,6 @@ declare module 'claude-code' {
       lastAt: number | null
       hitPct: number | null
       ttl: CacheTtl
-      isAuto: boolean
-      leadSec: number
       isRunning: boolean
       hasCompacted: boolean
       isHidden: boolean

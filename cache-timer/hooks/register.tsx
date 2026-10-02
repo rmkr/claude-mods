@@ -5,9 +5,7 @@ import type { CacheTtl } from '../types'
 
 const lastAt = atom({ plugin: 'cache-timer', key: 'lastAt' } as const, null as number | null)
 const hitPct = atom({ plugin: 'cache-timer', key: 'hitPct' } as const, null as number | null)
-const ttl = atom({ plugin: 'cache-timer', key: 'ttl' } as const, '5m' as CacheTtl)
-const isAuto = atom({ plugin: 'cache-timer', key: 'isAuto' } as const, false)
-const leadSec = atom({ plugin: 'cache-timer', key: 'leadSec' } as const, 30)
+const ttl = atom({ plugin: 'cache-timer', key: 'ttl' } as const, '1h' as CacheTtl)
 const isRunning = atom({ plugin: 'cache-timer', key: 'isRunning' } as const, false)
 const hasCompacted = atom({ plugin: 'cache-timer', key: 'hasCompacted' } as const, false)
 const isHidden = atom({ plugin: 'cache-timer', key: 'isHidden' } as const, false)
@@ -47,34 +45,35 @@ async function compact($: $) {
   }
 }
 
-async function tick($: $) {
+async function tick($: $, isAuto: boolean, lead: number) {
   const t = await $.clock.now()
   await update($, now, () => t)
   const ms = await left($, t)
   $.ui.status(ms === null ? undefined : ms > 0 ? `cache ${clock(ms)}` : 'cache cold')
-  const isDue = ms !== null && ms > 0 && ms <= (await read($, leadSec)) * 1000
-  if (isDue && (await read($, isAuto)) && !(await read($, hasCompacted))) await compact($)
+  // a lead as long as the TTL would compact right after every turn
+  const isDue = ms !== null && ms > 0 && ms <= lead && lead < ttlMs(await read($, ttl))
+  if (isDue && isAuto && !(await read($, hasCompacted))) await compact($)
 }
 
-export const register: Register = on => {
+// settings are the plugin's userConfig (plugin.json): rows in /config, saved in settings.json
+export const register: Register = (on, options) => {
+  const isAuto = options.autoCompact === true
+  const lead = Math.max(0.1, Number(options.minutesBeforeExpiry) || 5) * 60_000
+  const configTtl: CacheTtl = options.ttl === '5m' ? '5m' : '1h'
+  const isMeter = options.style === 'meter'
+
   on('session.start', async ($, e, next) => {
     await $.command.register({ name: 'cache', description: 'Show the prompt cache band again' })
-    $.clock.every(1000, () => void tick($))
+    await update($, ttl, () => configTtl)
+    $.clock.every(1000, () => void tick($, isAuto, lead))
     return next(e)
   })
 
-  // /cache shows the band; /cache ttl 5m|1h; /cache auto on|off [seconds]
-  on('command.run', { command: 'cache' }, async ($, e) => {
-    const [what, value, seconds] = e.args.trim().split(/\s+/)
-    if (what === 'ttl' && (value === '5m' || value === '1h')) await update($, ttl, () => value)
-    else if (what === 'auto' && (value === 'on' || value === 'off')) {
-      await update($, isAuto, () => value === 'on')
-      const n = Number(seconds)
-      if (Number.isFinite(n) && n >= 5) await update($, leadSec, () => Math.round(n))
-    } else if (what) return { text: 'Usage: /cache [ttl 5m|1h] [auto on|off [seconds]]' }
+  on('command.run', { command: 'cache' }, async $ => {
     await update($, isHidden, () => false)
-    const auto = (await read($, isAuto)) ? `on, ${await read($, leadSec)}s before expiry` : 'off'
-    return { text: `Cache band shown. TTL ${await read($, ttl)}, auto-compact ${auto}.` }
+    const total = ttlMs(await read($, ttl))
+    const auto = isAuto ? `on, at ${short(total - lead)}` : 'off'
+    return { text: `Cache band shown. TTL ${await read($, ttl)}, auto-compact ${auto}. Change them in /config.` }
   })
 
   on('turn.start', async ($, e, next) => {
@@ -104,10 +103,8 @@ export const register: Register = on => {
     if (e.props.hasSurvey || (await read($, isHidden))) return next(e)
     const { Box, Text, Button } = $.ui.resolve(e)
     const ms = await left($, await read($, now))
-    const lead = (await read($, leadSec)) * 1000
     const total = ttlMs(await read($, ttl))
     const hit = await read($, hitPct)
-    const auto = await read($, isAuto)
 
     let label = '—'
     let color = 'gray'
@@ -120,8 +117,33 @@ export const register: Register = on => {
       label = 'expired'
       color = 'red'
     }
-    const filled = e.props.isWorking ? SEGMENTS : Math.round((Math.max(0, ms ?? 0) / total) * SEGMENTS)
+    const facts = [
+      hit !== null && `${hit}% hit`,
+      isAuto && lead < total && `auto at ${short(total - lead)}`,
+    ].filter((f): f is string => typeof f === 'string')
+    const close = <Button key="close" label="×" plain role="dismiss" onPress={() => update($, isHidden, () => true)} />
 
+    if (!isMeter) {
+      return (
+        <Box flexDirection="row" justifyContent="flex-end" alignItems="center" gap={1}>
+          <Text color={color}>●</Text>
+          <Text dimColor>cache</Text>
+          <Text bold color={color}>
+            {label}
+          </Text>
+          {facts.map(f => (
+            <Text key={f} dimColor>
+              · {f}
+            </Text>
+          ))}
+          <Text dimColor>·</Text>
+          <Button key="compact" label="Compact" plain onPress={() => compact($)} />
+          {close}
+        </Box>
+      )
+    }
+
+    const filled = e.props.isWorking ? SEGMENTS : Math.round((Math.max(0, ms ?? 0) / total) * SEGMENTS)
     return (
       <Box flexDirection="row" alignItems="center" gap={1}>
         <Text color={color}>●</Text>
@@ -133,11 +155,10 @@ export const register: Register = on => {
           <Text color={color}>{'■'.repeat(filled)}</Text>
           <Text dimColor>{'■'.repeat(SEGMENTS - filled)}</Text>
         </Text>
-        {hit !== null && <Text dimColor>{hit}% hit</Text>}
-        {auto && <Text dimColor>auto {lead / 1000}s</Text>}
+        <Text dimColor>{facts.join(' · ')}</Text>
         <Box flexGrow={1} />
         <Button key="compact" label="Compact" onPress={() => compact($)} />
-        <Button key="close" label="×" role="dismiss" onPress={() => update($, isHidden, () => true)} />
+        {close}
       </Box>
     )
   })

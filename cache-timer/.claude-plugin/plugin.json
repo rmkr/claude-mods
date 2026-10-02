@@ -1,1 +1,40 @@
-{ "name": "cache-timer", "version": "0.1.0", "description": "Prompt cache countdown with compact and auto-compact before it expires", "types": "./types/index.d.ts" }
+{
+  "name": "cache-timer",
+  "version": "0.1.0",
+  "description": "Prompt cache countdown with compact and auto-compact before it expires",
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "autoCompact": {
+      "type": "boolean",
+      "title": "Auto-compact",
+      "description": "Compact on its own before the prompt cache expires, at most once per idle stretch.",
+      "default": false
+    },
+    "minutesBeforeExpiry": {
+      "type": "number",
+      "title": "Auto-compact minutes before expiry",
+      "description": "How long before the cache expires to compact. 5 compacts at 55 minutes on a 1h cache.",
+      "default": 5
+    },
+    "ttl": {
+      "type": "string",
+      "title": "Cache TTL",
+      "description": "How long the prompt cache lives. Corrects itself for the session after a compaction.",
+      "default": "1h",
+      "options": [
+        "1h",
+        "5m"
+      ]
+    },
+    "style": {
+      "type": "string",
+      "title": "Band style",
+      "description": "quiet: one small line on the right. meter: a card with a segmented countdown bar.",
+      "default": "quiet",
+      "options": [
+        "quiet",
+        "meter"
+      ]
+    }
+  }
+}
