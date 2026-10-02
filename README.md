@@ -8,12 +8,22 @@ Mods for Claude Code: plugins of function hooks that add panes, status line entr
 
 Shows how long until the prompt cache expires, so you can compact before the next message has to re-send the whole conversation uncached.
 
-- **Band above the prompt**: `● cache 44m ■■■■■■■■□□□□ 98% hit · auto at 55m   Compact ×`. Time left, a bar of the TTL remaining, the last turn's cache hit rate, and when auto-compact fires. Green while there's time, yellow near auto-compact, red once expired. Click the time to fold the band to `● 44m`; click it again to open it. Click `auto off` / `auto at 55m` to toggle auto-compact. `×` hides it; `/cache` brings it back. A mark on the bar shows where auto-compact fires. Set **Band style** to `quiet` in `/config` to drop the bar.
+- **Band above the prompt**: `● cache 44m ■■■■■■■■□□□□ 98% hit · auto at 55m   Compact ×`. Time left, a bar of the TTL remaining with a mark where auto-compact fires, the last turn's cache hit rate, and the auto-compact setting. Green while there's time, yellow near auto-compact, red once expired.
 - **Compact**: compacts immediately (not while a turn is running).
-- **Auto-compact**: off by default. Turn it on in `/config` (cache-timer rows) and it compacts 5 minutes before expiry, 55 minutes into a 1h cache, at most once per idle stretch. The minutes are configurable there too.
-- **TTL**: 1h by default, set in `/config`. It also corrects itself for the session after a compaction.
+- **Auto-compact**: off by default. When on, it compacts 5 minutes before expiry (55 minutes into a 1h cache), at most once per idle stretch.
 
-Settings are the plugin's `userConfig`, saved in `settings.json` under `pluginConfigs`. `/cache` prints the current values. The countdown starts when each turn ends.
+| Control | What it does |
+| --- | --- |
+| `Compact` | compact now |
+| `auto off` / `auto at 55m` | click to turn auto-compact on or off |
+| `×` | hide the band |
+| `/cache` | show or hide the band |
+| `/cache help` | list these controls in the session |
+| `/cache auto on` / `off` | turn auto-compact on or off |
+| `/cache auto 5m` | compact 5 minutes before the cache expires |
+| `/cache ttl 1h` / `5m` | set the cache lifetime; it also corrects itself after a compaction |
+
+Settings are the plugin's `userConfig`, saved in `settings.json` under `pluginConfigs`, so they persist across sessions. The same rows are in `/config` in a terminal session. The countdown restarts on every request that re-reads the conversation: each step of a turn, a forked agent, and Claude waking up when a background task finishes. Background shell commands and ordinary subagents don't call the API with this conversation, so they don't keep its cache warm.
 
 ## Install
 

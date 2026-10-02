@@ -1,15 +1,15 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface as $, Register } from 'claude-code'
+import type { EngineInterface as $, ModelUsage, Register } from 'claude-code'
 
 import type { CacheTtl } from '../types'
 
 const lastAt = atom({ plugin: 'cache-timer', key: 'lastAt' } as const, null as number | null)
+const cachedTokens = atom({ plugin: 'cache-timer', key: 'cachedTokens' } as const, 0)
 const hitPct = atom({ plugin: 'cache-timer', key: 'hitPct' } as const, null as number | null)
 const ttl = atom({ plugin: 'cache-timer', key: 'ttl' } as const, '1h' as CacheTtl)
 const isRunning = atom({ plugin: 'cache-timer', key: 'isRunning' } as const, false)
 const hasCompacted = atom({ plugin: 'cache-timer', key: 'hasCompacted' } as const, false)
 const isHidden = atom({ plugin: 'cache-timer', key: 'isHidden' } as const, false)
-const isCollapsed = atom({ plugin: 'cache-timer', key: 'isCollapsed' } as const, false)
 const now = atom({ plugin: 'cache-timer', key: 'now' } as const, 0)
 
 const ttlMs = (t: CacheTtl) => (t === '1h' ? 3_600_000 : 300_000)
@@ -57,6 +57,12 @@ async function setOption($: $, field: string, value: boolean | string) {
   if (r.deny) $.ui.toast(`cache-timer: ${field} unchanged: ${r.deny}`)
 }
 
+// whether a request kept the main conversation's cache warm: every main-thread request does; a subagent's
+// does only when it re-read that prefix (a fork of the conversation), not when it ran its own prompt
+export function refreshesMain(agentId: string | undefined, usage: ModelUsage, cached: number): boolean {
+  return agentId === undefined || (cached > 0 && usage.cache_read_input_tokens >= cached * 0.9)
+}
+
 type Run = { text: string; ink: 'color' | 'fg' | 'dim' }
 
 // the countdown bar as runs of one ink: `color` the time left, `dim` the time gone,
@@ -88,7 +94,6 @@ export const register: Register = (on, options) => {
   const isAuto = options.autoCompact === true
   const lead = Math.max(0.1, Number(options.minutesBeforeExpiry) || 5) * 60_000
   const configTtl: CacheTtl = options.ttl === '5m' ? '5m' : '1h'
-  const style = options.style === 'quiet' ? 'quiet' : 'segmented'
 
   on('session.start', async ($, e, next) => {
     await $.command.register({ name: 'cache', description: 'Show the prompt cache band again' })
@@ -97,12 +102,46 @@ export const register: Register = (on, options) => {
     return next(e)
   })
 
-  on('command.run', { command: 'cache' }, async $ => {
-    await update($, isHidden, () => false)
-    await update($, isCollapsed, () => false)
+  // /cache toggles the band; /cache help explains the controls; the rest change settings
+  on('command.run', { command: 'cache' }, async ($, e) => {
+    const [what = '', value = ''] = e.args.trim().toLowerCase().split(/\s+/)
     const total = ttlMs(await read($, ttl))
-    const auto = isAuto ? `on, at ${short(total - lead)}` : 'off'
-    return { text: `Cache band shown. TTL ${await read($, ttl)}, auto-compact ${auto}. Change them in /config.` }
+    const auto = isAuto && lead < total ? `on, compacts at ${short(total - lead)}` : 'off'
+    if (what === '') {
+      const isNowHidden = !(await read($, isHidden))
+      await update($, isHidden, () => isNowHidden)
+      return { text: isNowHidden ? 'Cache band hidden. /cache shows it.' : 'Cache band shown. /cache help lists the controls.' }
+    }
+    if (what === 'auto' && (value === 'on' || value === 'off')) {
+      await setOption($, 'autoCompact', value === 'on')
+      return { text: `Auto-compact ${value}.` }
+    }
+    const minutes = /^(\d+(?:\.\d+)?)m?$/.exec(value)
+    if (what === 'auto' && minutes) {
+      await setOption($, 'minutesBeforeExpiry', Number(minutes[1]))
+      await setOption($, 'autoCompact', true)
+      return { text: `Auto-compact on, ${minutes[1]} minutes before the cache expires.` }
+    }
+    if (what === 'ttl' && (value === '5m' || value === '1h')) {
+      await setOption($, 'ttl', value)
+      return { text: `Cache TTL set to ${value}.` }
+    }
+    return {
+      text: [
+        `Cache band: TTL ${await read($, ttl)}, auto-compact ${auto}.`,
+        '',
+        'On the band',
+        '  Compact          compact the conversation now',
+        '  auto off / on    click to turn auto-compact on or off',
+        '  ×                hide the band (/cache shows it again)',
+        '',
+        'Commands',
+        '  /cache           show or hide the band',
+        '  /cache auto on   turn auto-compact on (or off)',
+        '  /cache auto 5m   compact 5 minutes before the cache expires',
+        '  /cache ttl 1h    set the cache lifetime (1h or 5m)',
+      ].join('\n'),
+    }
   })
 
   on('turn.start', async ($, e, next) => {
@@ -110,13 +149,25 @@ export const register: Register = (on, options) => {
     return next(e)
   })
 
+  // every model request, main or a subagent's, as it completes: the cache's clock restarts on any that read
+  // the main conversation's prefix
+  on('turn.step', async function* ($, e, next) {
+    const result = yield* next(e)
+    const u = result.usage
+    if (u && refreshesMain(e.agentId, u, await read($, cachedTokens))) {
+      const t = await $.clock.now()
+      await update($, lastAt, () => t)
+      if (e.agentId === undefined) {
+        const sent = u.input_tokens + u.cache_read_input_tokens + u.cache_creation_input_tokens
+        await update($, cachedTokens, () => u.cache_read_input_tokens + u.cache_creation_input_tokens)
+        if (sent > 0) await update($, hitPct, () => Math.round((u.cache_read_input_tokens / sent) * 100))
+      }
+    }
+    return result
+  })
+
   on('turn.complete', async ($, e, next) => {
     if (e.agentId !== undefined) return next(e)
-    const t = await $.clock.now()
-    const u = e.usage
-    const sent = u ? u.input_tokens + u.cache_read_input_tokens + u.cache_creation_input_tokens : 0
-    await update($, lastAt, () => t)
-    await update($, hitPct, v => (u && sent > 0 ? Math.round((u.cache_read_input_tokens / sent) * 100) : v))
     await update($, isRunning, () => false)
     await update($, hasCompacted, () => false)
     return next(e)
@@ -147,16 +198,6 @@ export const register: Register = (on, options) => {
       color = 'red'
     }
     const close = <Button key="close" label="×" plain role="dismiss" onPress={() => update($, isHidden, () => true)} />
-    // clicking the countdown folds the band to the dot and the time; clicking again opens it
-    const time = <Button key="time" label={label} plain onPress={() => update($, isCollapsed, v => !v)} />
-    if (await read($, isCollapsed)) {
-      return (
-        <Box flexDirection="row" alignItems="center" gap={1}>
-          <Text color={color}>●</Text>
-          {time}
-        </Box>
-      )
-    }
     const auto = (
       <Button
         key="auto"
@@ -167,21 +208,6 @@ export const register: Register = (on, options) => {
       />
     )
 
-    if (style === 'quiet') {
-      return (
-        <Box flexDirection="row" alignItems="center" gap={1}>
-          <Text color={color}>●</Text>
-          <Text dimColor>cache</Text>
-          {time}
-          {hit !== null && <Text dimColor>· {hit}% hit ·</Text>}
-          {auto}
-          <Box flexGrow={1} />
-          <Button key="compact" label="Compact" plain onPress={() => compact($)} />
-          {close}
-        </Box>
-      )
-    }
-
     const runs = bar(
       e.props.isWorking ? 1 : Math.max(0, ms ?? 0) / total,
       isAuto && lead < total ? lead / total : null,
@@ -190,7 +216,9 @@ export const register: Register = (on, options) => {
       <Box flexDirection="row" alignItems="center" gap={1}>
         <Text color={color}>●</Text>
         <Text dimColor>cache</Text>
-        {time}
+        <Text bold color={color}>
+          {label}
+        </Text>
         <Text>
           {runs.map((r, i) =>
             r.ink === 'color' ? (

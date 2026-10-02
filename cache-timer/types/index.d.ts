@@ -4,12 +4,12 @@ declare module 'claude-code' {
   interface PluginState {
     'cache-timer': {
       lastAt: number | null
+      cachedTokens: number
       hitPct: number | null
       ttl: CacheTtl
       isRunning: boolean
       hasCompacted: boolean
       isHidden: boolean
-      isCollapsed: boolean
       now: number
     }
   }

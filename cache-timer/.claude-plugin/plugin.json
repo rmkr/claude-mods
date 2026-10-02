@@ -25,16 +25,6 @@
         "1h",
         "5m"
       ]
-    },
-    "style": {
-      "type": "string",
-      "title": "Band style",
-      "description": "segmented: a countdown bar. quiet: the same line without the bar.",
-      "default": "segmented",
-      "options": [
-        "segmented",
-        "quiet"
-      ]
     }
   }
 }
