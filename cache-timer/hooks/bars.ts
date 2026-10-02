@@ -1,7 +1,6 @@
 // what the band draws: pure helpers, kept apart so the tests reach them without the hooks
 
 export const SEGMENTS = 24
-export const SPINNER = '⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
 
 export const clock = (ms: number) => {
   const s = Math.floor(ms / 1000)
@@ -19,12 +18,6 @@ export function bar(fraction: number, markAt: number | null, n = SEGMENTS): Run[
   const cells: Run[] = Array.from({ length: n }, (_, i) => ({ text: '■', ink: i < filled ? 'color' : 'dim' }))
   if (markAt !== null) cells[Math.min(n - 1, Math.round(markAt * n))] = { text: '■', ink: 'fg' }
   return runsOf(cells)
-}
-
-// the sweep shown while Claude works: a three-segment comet running left to right, then off the end and around
-export function sweep(step: number, n = SEGMENTS): Run[] {
-  const head = step % (n + 3)
-  return runsOf(Array.from({ length: n }, (_, i) => ({ text: '■', ink: i <= head && i > head - 3 ? 'color' : 'dim' })))
 }
 
 // consecutive cells of one ink share a Text

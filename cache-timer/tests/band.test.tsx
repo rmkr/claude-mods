@@ -1,13 +1,13 @@
 import { expect, test } from 'claude-code/testing'
 
-import { bar, nextAction, segmentsFor, shownLeft, sweep } from '../hooks/bars'
+import { bar, nextAction, segmentsFor, shownLeft } from '../hooks/bars'
 import { refreshesMain } from '../hooks/register'
 
 const BAND = { component: 'AbovePrompt', props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 100 } } as const
 
 // one test per surface: the session's state (hidden) outlives a mount
 for (const surface of ['terminal', 'desktop'] as const) {
-  test(`the band draws, collapses to a pill and back, and /cache hides and shows it on ${surface}`, async ($, on) => {
+  test(`the band shrinks from the time and back, and × and /cache hide and show it on ${surface}`, async ($, on) => {
     // stands for the engine, which draws nothing in the band once the plugin passes
     on('ui.render', ($, e) => {
       const { Box } = $.ui.resolve(e)
@@ -16,10 +16,13 @@ for (const surface of ['terminal', 'desktop'] as const) {
     const ui = await $.ui.mount({ plugin: 'cache-timer', surface, ...BAND })
     expect(await ui.find({ key: 'compact' })).toBeDefined()
     expect(await ui.find({ key: 'auto' })).toBeDefined()
-    expect(await ui.find({ key: 'close' })).toBeUndefined()
-    await ui.press({ key: 'collapse' })
+    await ui.press({ key: 'time' })
     expect(await ui.find({ key: 'compact' })).toBeUndefined()
     await ui.press({ key: 'expand' })
+    expect(await ui.find({ key: 'compact' })).toBeDefined()
+    await ui.press({ key: 'close' })
+    expect(await ui.find({ key: 'compact' })).toBeUndefined()
+    await $.command.run({ command: 'cache', args: '' })
     expect(await ui.find({ key: 'compact' })).toBeDefined()
     await $.command.run({ command: 'cache', args: '' })
     expect(await ui.find({ key: 'compact' })).toBeUndefined()
@@ -45,15 +48,6 @@ test('main requests and forks keep the cache warm; a subagent on its own prompt 
   expect(refreshesMain('explorer', usage(3_000), 0)).toBe(false)
 })
 
-test('the sweep is a three-segment comet that runs off the end and starts over', async () => {
-  const lit = (step: number) => sweep(step).filter(r => r.ink === 'color').map(r => r.text).join('').length
-  expect(lit(0)).toBe(1)
-  expect(lit(5)).toBe(3)
-  expect(lit(24 + 2)).toBe(0)
-  expect(lit(24 + 3)).toBe(1)
-  expect(sweep(10).map(r => r.text).join('')).toHaveLength(24)
-})
-
 test('the bar takes the room its region leaves, 8 to 24 segments', async () => {
   expect(segmentsFor(60, 10)).toBe(24)
   expect(segmentsFor(30, 10)).toBe(20)
@@ -62,12 +56,12 @@ test('the bar takes the room its region leaves, 8 to 24 segments', async () => {
 })
 
 for (const surface of ['terminal', 'desktop'] as const) {
-  test(`while Claude works the band has no buttons on ${surface}`, async $ => {
+  test(`while Claude works there is nothing to compact or keep warm on ${surface}`, async $ => {
     const ui = await $.ui.mount({ plugin: 'cache-timer', surface, ...BAND, props: { ...BAND.props, isWorking: true } })
     expect(await ui.find({ key: 'compact' })).toBeUndefined()
     expect(await ui.find({ key: 'warm' })).toBeUndefined()
-    expect(await ui.find({ key: 'auto' })).toBeUndefined()
-    expect(await ui.find({ key: 'collapse' })).toBeUndefined()
+    expect(await ui.find({ key: 'auto' })).toBeDefined()
+    expect(await ui.find({ key: 'close' })).toBeDefined()
     await ui.unmount()
   })
 }

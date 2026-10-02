@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface as $, ModelUsage, Register } from 'claude-code'
 
 import type { AutoMode, CacheTtl } from '../types'
-import { bar, label, nextAction, segmentsFor, short, shownLeft, SPINNER, sweep } from './bars'
+import { bar, label, nextAction, segmentsFor, short, shownLeft } from './bars'
 
 const lastAt = atom({ plugin: 'cache-timer', key: 'lastAt' } as const, null as number | null)
 const cachedTokens = atom({ plugin: 'cache-timer', key: 'cachedTokens' } as const, 0)
@@ -15,7 +15,6 @@ const pings = atom({ plugin: 'cache-timer', key: 'pings' } as const, 0)
 const isCollapsed = atom({ plugin: 'cache-timer', key: 'isCollapsed' } as const, false)
 const isHidden = atom({ plugin: 'cache-timer', key: 'isHidden' } as const, false)
 const shown = atom({ plugin: 'cache-timer', key: 'shown' } as const, null as number | null)
-const frame = atom({ plugin: 'cache-timer', key: 'frame' } as const, 0)
 const autoMode = atom({ plugin: 'cache-timer', key: 'autoMode' } as const, 'off' as AutoMode)
 
 
@@ -96,11 +95,6 @@ export function refreshesMain(agentId: string | undefined, usage: ModelUsage, ca
   return agentId === undefined || (cached > 0 && usage.cache_read_input_tokens >= cached * 0.9)
 }
 
-// advances the sweep five times a second, only while a turn runs
-async function animate($: $) {
-  if (await read($, isRunning)) await update($, frame, n => n + 1)
-}
-
 // a subagent still running in the background: its report back will land on this conversation
 async function hasBackgroundWork($: $) {
   return (await $.agent.list()).some(a => a.status === 'running')
@@ -160,7 +154,6 @@ export const register: Register = (on, options) => {
     await update($, ttl, () => configTtl)
     await update($, autoMode, () => configMode)
     $.clock.every(1000, () => void tick($, lead))
-    $.clock.every(200, () => void animate($))
     return next(e)
   })
 
@@ -207,7 +200,8 @@ export const register: Register = (on, options) => {
         '  Compact             summarize the conversation now; later messages send less',
         '  Keep warm           restart the cache timer now with one tiny request; nothing is lost',
         '  auto ...            click to cycle: off, compact, keep warm',
-        '  –                   collapse to a small pill; click the pill to open it again',
+        '  the time            click to shrink the band to the dot and the time; click it again to open it',
+        '  ×                   hide the band (/cache shows it again)',
         '',
         'Commands',
         '  /cache              show or hide the band',
@@ -279,11 +273,14 @@ export const register: Register = (on, options) => {
         void setMode($, picked)
         break
       }
-      case 'collapse':
+      case 'time':
         await update($, isCollapsed, () => true)
         break
       case 'expand':
         await update($, isCollapsed, () => false)
+        break
+      case 'close':
+        await update($, isHidden, () => true)
         break
       default:
         return next(e)
@@ -300,14 +297,14 @@ export const register: Register = (on, options) => {
     const mode = await read($, autoMode)
     const isArmed = mode !== 'off' && lead < total
     const working = e.props.isWorking
-    const step = working ? await read($, frame) : 0
     // presses are handled by key in the ui.press hook above
     const press = () => {}
 
     let text = '—'
     let color = 'gray'
+    // while Claude works every step refreshes the cache: there is nothing to count down
     if (working) {
-      text = SPINNER[step % SPINNER.length] ?? '·'
+      text = 'live'
       color = 'green'
     } else if (remaining === null && (await read($, hasCompacted))) text = 'compacted'
     else if (remaining !== null && remaining > 0) {
@@ -323,26 +320,22 @@ export const register: Register = (on, options) => {
       return (
         <Box flexDirection="row" alignItems="center" gap={1}>
           <Text color={color}>●</Text>
-          <Text bold color={color}>
-            {text}
-          </Text>
-          {!working && <Button key="expand" label="+" plain dimColor onPress={press} />}
+          <Button key="expand" label={text} plain onPress={press} />
         </Box>
       )
     }
     const hitText = hit === null ? null : `${hit}%`
     const autoText = isArmed ? `auto ${mode === 'keep warm' ? 'warm' : mode} ${short(total - lead)}` : 'auto off'
     const used =
-      2 + 6 + text.length + 1 + (hitText ? hitText.length + 1 : 0) + autoText.length + 1 + (isWarm && !working ? 14 : 0) + (working ? 0 : 12 + 4)
+      2 + 6 + text.length + 1 + (hitText ? hitText.length + 1 : 0) + autoText.length + 1 + (isWarm && !working ? 14 : 0) + (working ? 0 : 12) + 4
     const n = segmentsFor(e.props.bodyColumns, used)
-    const runs = working ? sweep(step, n) : bar(Math.max(0, remaining ?? 0) / total, isArmed ? lead / total : null, n)
+    const runs = bar(working ? 1 : Math.max(0, remaining ?? 0) / total, isArmed ? lead / total : null, n)
     return (
       <Box flexDirection="row" alignItems="center" gap={1}>
         <Text color={color}>●</Text>
         <Text dimColor>cache</Text>
-        <Text bold color={color}>
-          {text}
-        </Text>
+        {/* clicking the time shrinks the band to the dot and the time */}
+        <Button key="time" label={text} plain onPress={press} />
         <Text>
           {runs.map((r, i) =>
             r.ink === 'color' ? (
@@ -359,12 +352,11 @@ export const register: Register = (on, options) => {
           )}
         </Text>
         {hitText && <Text dimColor>{hitText}</Text>}
-        {/* while the sweep runs the band redraws five times a second and buttons miss clicks, so it has none */}
-        {working ? <Text dimColor>{autoText}</Text> : <Button key="auto" label={autoText} plain dimColor onPress={press} />}
+        <Button key="auto" label={autoText} plain dimColor onPress={press} />
         <Box flexGrow={1} />
         {isWarm && !working && <Button key="warm" label="Keep warm" onPress={press} />}
         {!working && <Button key="compact" label="Compact" variant="primary" onPress={press} />}
-        {!working && <Button key="collapse" label="–" plain dimColor onPress={press} />}
+        <Button key="close" label="×" plain role="dismiss" onPress={press} />
       </Box>
     )
   })
