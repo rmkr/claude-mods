@@ -13,9 +13,9 @@ declare module 'claude-code' {
       pings: number
       isCollapsed: boolean
       isHidden: boolean
-      now: number
-      autoMode: AutoMode
+      shown: number | null
       frame: number
+      autoMode: AutoMode
     }
   }
 }

@@ -1,6 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
-import { bar, refreshesMain, segmentsFor, sweep } from '../hooks/register'
+import { bar, segmentsFor, shownLeft, sweep } from '../hooks/bars'
+import { refreshesMain } from '../hooks/register'
 
 const BAND = { component: 'AbovePrompt', props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 100 } } as const
 
@@ -53,9 +54,27 @@ test('the sweep is a three-segment comet that runs off the end and starts over',
   expect(sweep(10).map(r => r.text).join('')).toHaveLength(24)
 })
 
-test('the bar takes the room the rest of the row leaves, 8 to 24 segments', async () => {
-  expect(segmentsFor(200, 60)).toBe(24)
-  expect(segmentsFor(80, 60)).toBe(20)
-  expect(segmentsFor(50, 60)).toBe(8)
+test('the bar takes the room its region leaves, 8 to 24 segments', async () => {
+  expect(segmentsFor(60, 10)).toBe(24)
+  expect(segmentsFor(30, 10)).toBe(20)
+  expect(segmentsFor(12, 10)).toBe(8)
   expect(bar(0.5, null, 10).map(r => r.text).join('')).toHaveLength(10)
+})
+
+for (const surface of ['terminal', 'desktop'] as const) {
+  test(`while Claude works there is nothing to compact or keep warm on ${surface}`, async $ => {
+    const ui = await $.ui.mount({ plugin: 'cache-timer', surface, ...BAND, props: { ...BAND.props, isWorking: true } })
+    expect(await ui.find({ key: 'compact' })).toBeUndefined()
+    expect(await ui.find({ key: 'warm' })).toBeUndefined()
+    await ui.unmount()
+  })
+}
+
+test('the shown time moves in whole minutes until the last minute, so the band redraws rarely', async () => {
+  expect(shownLeft(null)).toBe(null)
+  expect(shownLeft(-5)).toBe(0)
+  expect(shownLeft(44 * 60_000 + 1)).toBe(45 * 60_000)
+  expect(shownLeft(44 * 60_000)).toBe(44 * 60_000)
+  expect(shownLeft(59_500)).toBe(60_000)
+  expect(shownLeft(12_300)).toBe(13_000)
 })

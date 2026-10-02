@@ -2,6 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface as $, ModelUsage, Register } from 'claude-code'
 
 import type { AutoMode, CacheTtl } from '../types'
+import { bar, label, segmentsFor, short, shownLeft, SPINNER, sweep } from './bars'
 
 const lastAt = atom({ plugin: 'cache-timer', key: 'lastAt' } as const, null as number | null)
 const cachedTokens = atom({ plugin: 'cache-timer', key: 'cachedTokens' } as const, 0)
@@ -12,20 +13,12 @@ const hasCompacted = atom({ plugin: 'cache-timer', key: 'hasCompacted' } as cons
 const pings = atom({ plugin: 'cache-timer', key: 'pings' } as const, 0)
 const isCollapsed = atom({ plugin: 'cache-timer', key: 'isCollapsed' } as const, false)
 const isHidden = atom({ plugin: 'cache-timer', key: 'isHidden' } as const, false)
-const now = atom({ plugin: 'cache-timer', key: 'now' } as const, 0)
-const autoMode = atom({ plugin: 'cache-timer', key: 'autoMode' } as const, 'off' as AutoMode)
+const shown = atom({ plugin: 'cache-timer', key: 'shown' } as const, null as number | null)
 const frame = atom({ plugin: 'cache-timer', key: 'frame' } as const, 0)
+const autoMode = atom({ plugin: 'cache-timer', key: 'autoMode' } as const, 'off' as AutoMode)
 
 
 const ttlMs = (t: CacheTtl) => (t === '1h' ? 3_600_000 : 300_000)
-const clock = (ms: number) => {
-  const s = Math.floor(ms / 1000)
-  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
-}
-// m:ss under ten minutes, whole minutes above (a 1h TTL reads as "44m")
-const short = (ms: number) => (ms < 600_000 ? clock(ms) : `${Math.ceil(ms / 60_000)}m`)
-const SEGMENTS = 24
-const SPINNER = '⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
 // ponytail: auto keep-warm stops after 3 pings with nobody typing, so a session left overnight lets its cache go;
 // make it a setting if longer absences matter
 const MAX_PINGS = 3
@@ -101,40 +94,6 @@ export function refreshesMain(agentId: string | undefined, usage: ModelUsage, ca
   return agentId === undefined || (cached > 0 && usage.cache_read_input_tokens >= cached * 0.9)
 }
 
-type Run = { text: string; ink: 'color' | 'fg' | 'dim' }
-
-// the countdown bar as runs of one ink: `color` the time left, `dim` the time gone,
-// `fg` (the theme's own text colour) the segment where the auto action fires
-export function bar(fraction: number, markAt: number | null, n = SEGMENTS): Run[] {
-  const filled = Math.round(fraction * n)
-  const cells: Run[] = Array.from({ length: n }, (_, i) => ({ text: '■', ink: i < filled ? 'color' : 'dim' }))
-  if (markAt !== null) cells[Math.min(n - 1, Math.round(markAt * n))] = { text: '■', ink: 'fg' }
-  return runsOf(cells)
-}
-
-// consecutive cells of one ink share a Text
-function runsOf(cells: Run[]): Run[] {
-  const runs: Run[] = []
-  for (const c of cells) {
-    const last = runs[runs.length - 1]
-    if (last && last.ink === c.ink) last.text += c.text
-    else runs.push({ ...c })
-  }
-  return runs
-}
-
-// the sweep shown while Claude works: a three-segment comet running left to right, then off the end and around
-export function sweep(step: number, n = SEGMENTS): Run[] {
-  const head = step % (n + 3)
-  return runsOf(Array.from({ length: n }, (_, i) => ({ text: '■', ink: i <= head && i > head - 3 ? 'color' : 'dim' })))
-}
-
-// the bar takes whatever the rest of the row leaves, from 8 to 24 segments; `used` is the other items' width in
-// cells, a gap included for each, and each Button adds about 4 cells of chrome
-export function segmentsFor(columns: number, used: number): number {
-  return Math.max(8, Math.min(SEGMENTS, columns - used))
-}
-
 // advances the sweep five times a second, only while a turn runs
 async function animate($: $) {
   if (await read($, isRunning)) await update($, frame, n => n + 1)
@@ -143,8 +102,11 @@ async function animate($: $) {
 async function tick($: $, lead: number) {
   const mode = await read($, autoMode)
   const t = await $.clock.now()
-  await update($, now, () => t)
   const ms = await left($, t)
+  // the band reads only what it shows, written when it changes: each redraw gives its buttons new handles, and a
+  // click that lands on an old one is lost
+  const next = shownLeft(ms)
+  if ((await read($, shown)) !== next) await update($, shown, () => next)
   // a lead as long as the TTL would act right after every turn
   const isDue = ms !== null && ms > 0 && ms <= lead && lead < ttlMs(await read($, ttl))
   if (!isDue || isBusy || mode === 'off') return
@@ -273,52 +235,87 @@ export const register: Register = (on, options) => {
     return next(e)
   })
 
+  // every band button, handled by its key here rather than by the closure of the drawing it came from, so a press
+  // that lands just after a redraw still counts
+  on('ui.press', { component: 'AbovePrompt', plugin: 'cache-timer' }, async ($, e, next) => {
+    const mode = await read($, autoMode)
+    switch (e.element) {
+      case 'compact':
+        void compact($)
+        break
+      case 'warm':
+        void keepWarm($)
+        break
+      case 'auto': {
+        // the band changes at once; the saved setting catches up when the module reloads
+        const picked = NEXT_MODE[mode]
+        await update($, autoMode, () => picked)
+        void setMode($, picked)
+        break
+      }
+      case 'collapse':
+        await update($, isCollapsed, () => true)
+        break
+      case 'expand':
+        await update($, isCollapsed, () => false)
+        break
+      default:
+        return next(e)
+    }
+    return { element: e.element }
+  })
+
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.props.hasSurvey || (await read($, isHidden))) return next(e)
     const { Box, Text, Button } = $.ui.resolve(e)
-    const ms = await left($, await read($, now))
+    const remaining = await read($, shown)
     const total = ttlMs(await read($, ttl))
     const hit = await read($, hitPct)
     const mode = await read($, autoMode)
     const isArmed = mode !== 'off' && lead < total
+    const working = e.props.isWorking
+    const step = working ? await read($, frame) : 0
+    // presses are handled by key in the ui.press hook above
+    const press = () => {}
 
-    let label = '—'
+    let text = '—'
     let color = 'gray'
-    const step = await read($, frame)
-    if (e.props.isWorking) {
-      label = SPINNER[step % SPINNER.length] ?? '·'
+    if (working) {
+      text = SPINNER[step % SPINNER.length] ?? '·'
       color = 'green'
-    }
-    else if (ms === null && (await read($, hasCompacted))) label = 'compacted'
-    else if (ms !== null && ms > 0) {
-      label = short(ms)
-      color = ms > lead + 30_000 ? 'green' : 'yellow'
-    } else if (ms !== null) {
-      label = 'expired'
+    } else if (remaining === null && (await read($, hasCompacted))) text = 'compacted'
+    else if (remaining !== null && remaining > 0) {
+      text = label(remaining)
+      color = remaining > lead + 60_000 ? 'green' : 'yellow'
+    } else if (remaining === 0) {
+      text = 'expired'
       color = 'red'
     }
-    const hitText = hit === null ? null : `${hit}%`
-    const autoText = isArmed ? `auto ${mode === 'keep warm' ? 'warm' : mode} ${short(total - lead)}` : 'auto off'
-    const isWarm = ms !== null && ms > 0
-    const used =
-      2 + 6 + label.length + 1 + (hitText ? hitText.length + 1 : 0) + autoText.length + 1 + (isWarm ? 14 : 0) + 12 + 4
-    const n = segmentsFor(e.props.bodyColumns, used)
-    // collapsed: one clickable pill; clicking it opens the band again
+    const isWarm = remaining !== null && remaining > 0
+
     if (await read($, isCollapsed)) {
       return (
         <Box flexDirection="row" alignItems="center" gap={1}>
           <Text color={color}>●</Text>
-          <Button key="expand" label={`cache ${label}`} plain onPress={() => update($, isCollapsed, () => false)} />
+          <Text bold color={color}>
+            {text}
+          </Text>
+          <Button key="expand" label="+" plain dimColor onPress={press} />
         </Box>
       )
     }
-    const runs = e.props.isWorking ? sweep(step, n) : bar(Math.max(0, ms ?? 0) / total, isArmed ? lead / total : null, n)
+    const hitText = hit === null ? null : `${hit}%`
+    const autoText = isArmed ? `auto ${mode === 'keep warm' ? 'warm' : mode} ${short(total - lead)}` : 'auto off'
+    const used =
+      2 + 6 + text.length + 1 + (hitText ? hitText.length + 1 : 0) + autoText.length + 1 + (isWarm && !working ? 14 : 0) + (working ? 0 : 12) + 4
+    const n = segmentsFor(e.props.bodyColumns, used)
+    const runs = working ? sweep(step, n) : bar(Math.max(0, remaining ?? 0) / total, isArmed ? lead / total : null, n)
     return (
       <Box flexDirection="row" alignItems="center" gap={1}>
         <Text color={color}>●</Text>
         <Text dimColor>cache</Text>
         <Text bold color={color}>
-          {label}
+          {text}
         </Text>
         <Text>
           {runs.map((r, i) =>
@@ -336,22 +333,11 @@ export const register: Register = (on, options) => {
           )}
         </Text>
         {hitText && <Text dimColor>{hitText}</Text>}
-        <Button
-          key="auto"
-          label={autoText}
-          plain
-          dimColor
-          onPress={async () => {
-            // the band changes at once; the saved setting catches up when the module reloads
-            const picked = NEXT_MODE[mode]
-            await update($, autoMode, () => picked)
-            await setMode($, picked)
-          }}
-        />
+        <Button key="auto" label={autoText} plain dimColor onPress={press} />
         <Box flexGrow={1} />
-        {isWarm && <Button key="warm" label="Keep warm" onPress={() => keepWarm($)} />}
-        <Button key="compact" label="Compact" variant="primary" onPress={() => compact($)} />
-        <Button key="collapse" label="–" plain dimColor onPress={() => update($, isCollapsed, () => true)} />
+        {isWarm && !working && <Button key="warm" label="Keep warm" onPress={press} />}
+        {!working && <Button key="compact" label="Compact" variant="primary" onPress={press} />}
+        <Button key="collapse" label="–" plain dimColor onPress={press} />
       </Box>
     )
   })
