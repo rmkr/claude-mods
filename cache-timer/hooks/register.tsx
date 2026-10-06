@@ -96,14 +96,17 @@ async function keepWarm($: $): Promise<{ ok: boolean; text: string }> {
 }
 
 // settings are userConfig fields; writing one saves to settings.json and reloads the module with the new value
+// the toast already names the plugin. A save made while the last one is still reloading the module finds no row, so
+// look once more after a second
 async function setOption($: $, field: string, value: boolean | number | string) {
-  const row = (await $.config.list()).find(r => r.key.replace(/@[^.]+/, '') === `cache-timer.${field}`)
+  const find = async () => (await $.config.list()).find(r => r.key.replace(/@[^.]+/, '') === `cache-timer.${field}`)
+  const row = (await find()) ?? (await $.clock.sleep(1000), await find())
   if (!row) {
-    $.ui.toast(`cache-timer: ${field} not found; set it in /config`)
+    $.ui.toast(`${field} not found; set it in /config`)
     return
   }
   const r = await $.config.set({ key: row.key, value })
-  if (r.deny) $.ui.toast(`cache-timer: ${field} unchanged: ${r.deny}`)
+  if (r.deny) $.ui.toast(`${field} unchanged: ${r.deny}`)
 }
 
 // whether a request kept the main conversation's cache warm: every main-thread request does; a subagent's
