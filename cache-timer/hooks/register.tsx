@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface as $, ModelUsage, Register, Timer } from 'claude-code'
+import type { EngineInterface as $, ModelUsage, Register } from 'claude-code'
 
 import type { AutoMode, CacheTtl } from '../types'
 import { bar, label, nextAction, segmentsFor, shownLeft } from './bars'
@@ -17,9 +17,6 @@ const isHidden = atom({ plugin: 'cache-timer', key: 'isHidden' } as const, false
 const shown = atom({ plugin: 'cache-timer', key: 'shown' } as const, null as number | null)
 const widthCheck = atom({ plugin: 'cache-timer', key: 'widthCheck' } as const, 0)
 const autoMode = atom({ plugin: 'cache-timer', key: 'autoMode' } as const, 'off' as AutoMode)
-// the mode last clicked, until a reload brings it back in the settings: a reload cancels the old module's pending
-// save, and its settings may hold an earlier click
-const pickedMode = atom({ plugin: 'cache-timer', key: 'pickedMode' } as const, null as AutoMode | null)
 
 const ttlMs = (t: CacheTtl) => (t === '1h' ? 3_600_000 : 300_000)
 // ponytail: auto keep-warm stops after 3 pings with nobody typing, so a session left overnight lets its cache go;
@@ -33,8 +30,6 @@ let isNarrowShown = false
 // keep-warm pings that failed in a row: capped even while a background agent runs, so a failing API is not
 // retried every second
 let failedPings = 0
-// the auto button's save, waiting for the clicks to stop
-let saveTimer: Timer | undefined
 // the last lastAt saved to the store; undefined after a reload, so the first tick saves it
 let savedAt: number | null | undefined
 
@@ -100,12 +95,10 @@ async function keepWarm($: $): Promise<{ ok: boolean; text: string }> {
   return { ok: false, text: `Keep warm failed: ${r.reason}` }
 }
 
-// settings are userConfig fields; writing one saves to settings.json and reloads the module with the new value
-// the toast already names the plugin. A save made while the module reloads finds no row, so look once more after a
-// second; in the old module the reload cancels that wait, and session.start saves the click again
+// settings are userConfig fields; writing one saves to settings.json and reloads the module with the new value, in
+// every chat; the toast already names the plugin
 async function setOption($: $, field: string, value: boolean | number | string) {
-  const find = async () => (await $.config.list()).find(r => r.key.replace(/@[^.]+/, '') === `cache-timer.${field}`)
-  const row = (await find()) ?? (await $.clock.sleep(1000), await find())
+  const row = (await $.config.list()).find(r => r.key.replace(/@[^.]+/, '') === `cache-timer.${field}`)
   if (!row) {
     $.ui.toast(`${field} not found; set it in /config`)
     return
@@ -114,10 +107,12 @@ async function setOption($: $, field: string, value: boolean | number | string) 
   if (r.deny) $.ui.toast(`${field} unchanged: ${r.deny}`)
 }
 
-// the band changes at once; the saved setting catches up when the module reloads
+// the auto mode is each chat's own, kept under its id so a reopened chat has it; the setting is only where a chat
+// starts. A setting written from the band reloaded every chat, and each one wrote its own click back over the others
+// ponytail: mode: entries are never pruned; drop them with the stale last: ones if the store grows
 async function pickMode($: $, picked: AutoMode) {
   await update($, autoMode, () => picked)
-  await update($, pickedMode, () => picked)
+  await $.store.set(`mode:${await $.session.id()}`, picked)
 }
 
 // whether a request kept the main conversation's cache warm: every main-thread request does; a subagent's
@@ -211,12 +206,8 @@ export const register: Register = (on, options) => {
       immediate: true,
     })
     await update($, ttl, () => configTtl)
-    const picked = await read($, pickedMode)
-    if (picked !== null && picked !== configMode) void setOption($, 'autoMode', picked)
-    else {
-      await update($, pickedMode, () => null)
-      await update($, autoMode, () => configMode)
-    }
+    const mode = (await $.store.get(`mode:${await $.session.id()}`)) as AutoMode | undefined
+    await update($, autoMode, () => mode ?? configMode)
     await restore($, configTtl)
     $.clock.every(1000, () => void tick($, lead))
     return next(e)
@@ -238,8 +229,7 @@ export const register: Register = (on, options) => {
     const picked = modes[value]
     if (what === 'auto' && picked) {
       await pickMode($, picked)
-      await setOption($, 'autoMode', picked)
-      return { text: `Auto: ${picked}.` }
+      return { text: `Auto in this chat: ${picked}. New chats start with the Auto action in /config.` }
     }
     const minutes = /^(\d+(?:\.\d+)?)m?$/.exec(value)
     if (what === 'auto' && minutes) {
@@ -258,17 +248,18 @@ export const register: Register = (on, options) => {
         'On the band',
         '  Compact             summarize the conversation now; later messages send less',
         '  Keep warm           restart the cache timer now with one tiny request; nothing is lost',
-        '  auto ...            click to cycle: off, compact, keep warm',
+        '  auto ...            click to cycle this chat: off, compact, keep warm',
         '  the time            click to shrink the band to the dot and the time; click it again to open it',
         '  ×                   hide the band (/cache shows it again)',
         '',
         'Commands',
         '  /cache              show or hide the band',
         '  /cache warm         keep the cache warm now',
-        '  /cache auto compact compact before the cache expires (also: keep-warm, off)',
+        '  /cache auto compact compact this chat before its cache expires (also: keep-warm, off)',
         '  /cache auto 5m      act 5 minutes before the cache expires',
         '  /cache ttl 1h       set the cache lifetime (1h or 5m)',
         '',
+        'Each chat has its own auto action; /config sets the one a new chat starts with.',
         'With auto off you get a reminder before the cache expires. Auto-compact waits while a background agent',
         'runs, so its report back finds the full conversation; keep warm still fires.',
         '',
@@ -330,6 +321,7 @@ export const register: Register = (on, options) => {
       await update($, hasWarned, () => false)
       await update($, hasCompacted, () => false)
       await update($, pings, () => 0)
+      await update($, autoMode, () => configMode)
     }
     return next(e)
   })
@@ -345,15 +337,9 @@ export const register: Register = (on, options) => {
       case 'warm':
         void keepWarm($).then(r => $.ui.toast(r.text))
         break
-      case 'auto': {
-        // saved once the clicks stop: each save reloads the module, slowly in the desktop app, and a click during
-        // a reload waits for it and finds no settings row
-        const picked = NEXT_MODE[mode]
-        await pickMode($, picked)
-        saveTimer?.cancel()
-        saveTimer = $.clock.after(1500, () => void setOption($, 'autoMode', picked))
+      case 'auto':
+        await pickMode($, NEXT_MODE[mode])
         break
-      }
       case 'time':
         await update($, isCollapsed, () => true)
         break
