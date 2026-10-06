@@ -229,6 +229,24 @@ test('the auto button cycles off, compact, keep warm, off with one settings writ
   await ui.unmount()
 })
 
+test('a save made while the module reloads looks for its row once more', async ($, on) => {
+  const clock = mock.clock(on, { now: 1_000_000 })
+  engine(on)
+  const writes: unknown[] = []
+  let lists = 0
+  on('config.list', () => ({ value: lists++ === 0 ? [] : [{ key: 'cache-timer.autoMode', label: 'Auto action', kind: 'choice', value: 'off', provider: { plugin: 'cache-timer', tier: 'user' }, isLocked: false }] }) as any)
+  on('config.set', ($: any, e: any) => {
+    writes.push(e.value)
+    return { value: e.value } as any
+  })
+  await cacheOnce($)
+  const ui = await $.ui.mount({ plugin: 'cache-timer', surface: 'terminal', ...BAND })
+  await ui.press({ key: 'auto' })
+  await clock.advance(1000)
+  expect(writes).toEqual(['compact'])
+  await ui.unmount()
+})
+
 test('a reopened conversation picks up its countdown', async ($, on) => {
   const clock = mock.clock(on, { now: 10_000_000 })
   engine(on, undefined, [], { 'last:this': { at: 10_000_000 - 15 * 60_000, tokens: 50_000 } })
