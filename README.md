@@ -19,7 +19,7 @@ The band sits above the chat box:
 | `●` and the time | Time left before the cache expires. Whole minutes, then seconds in the last minute. Green while there's time, yellow near the auto action, red once expired. Click the time to shrink the band to `● 44m`; click it again to open it. A narrow window gets the small view on its own. |
 | Bar | The same countdown as a bar. One segment in your text colour marks where the auto action fires. |
 | `98%` | How much of the last request's input came from the cache. |
-| `auto …` | What happens automatically before expiry: `auto off`, `auto compact 55m` or `auto warm 55m`. Click to cycle off → compact → keep warm. |
+| `auto …` | What happens automatically before expiry: `auto off`, `auto compact 55m` or `auto warm 55m`. Click to cycle off → compact → keep warm, for this chat only. |
 | `Keep warm` | Restarts the cache timer with one tiny request. Nothing is summarized or lost. Shown only while the cache is still warm. |
 | `Compact` | Summarizes the conversation now, so later messages send less. Shown once there's a conversation to compact; in the desktop app it sends `/compact` for you. |
 | `×` | Hides the band. Type `/cache` to bring it back. |
@@ -43,7 +43,7 @@ While Claude is working the band shows `live` with a full bar, since every step 
 | `/cache` | Show or hide the band (runs at once, even mid-turn) |
 | `/cache help` | List the controls and current settings in the session |
 | `/cache warm` | Keep the cache warm now |
-| `/cache auto compact` / `keep-warm` / `off` | Set the auto action |
+| `/cache auto compact` / `keep-warm` / `off` | Set the auto action for this chat |
 | `/cache auto 5m` | Run the auto action 5 minutes before expiry |
 | `/cache ttl 1h` / `5m` | Set the cache lifetime |
 
@@ -53,7 +53,7 @@ Settings persist across sessions. Change them with the band and `/cache` command
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
-| Auto action | off | What happens before the cache expires: `compact` (at most once per idle stretch; waits while a background agent runs), `keep warm`, or `off` (a reminder instead) |
+| Auto action | off | The auto action a new chat starts with (the band's auto button changes one chat). What happens before the cache expires: `compact` (at most once per idle stretch; waits while a background agent runs), `keep warm`, or `off` (a reminder instead) |
 | Minutes before expiry | 5 | When the auto action runs (5 = 55 minutes into a 1h cache) |
 | Cache TTL | 1h | How long the cache lives |
 
