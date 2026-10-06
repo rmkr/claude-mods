@@ -17,6 +17,7 @@ declare module 'claude-code' {
       shown: number | null
       widthCheck: number
       autoMode: AutoMode
+      pickedMode: AutoMode | null
     }
   }
 }
