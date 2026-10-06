@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface as $, ModelUsage, Register } from 'claude-code'
+import type { EngineInterface as $, ModelUsage, Register, Timer } from 'claude-code'
 
 import type { AutoMode, CacheTtl } from '../types'
 import { bar, label, nextAction, segmentsFor, shownLeft } from './bars'
@@ -17,6 +17,9 @@ const isHidden = atom({ plugin: 'cache-timer', key: 'isHidden' } as const, false
 const shown = atom({ plugin: 'cache-timer', key: 'shown' } as const, null as number | null)
 const widthCheck = atom({ plugin: 'cache-timer', key: 'widthCheck' } as const, 0)
 const autoMode = atom({ plugin: 'cache-timer', key: 'autoMode' } as const, 'off' as AutoMode)
+// the mode last clicked, until a reload brings it back in the settings: a reload cancels the old module's pending
+// save, and its settings may hold an earlier click
+const pickedMode = atom({ plugin: 'cache-timer', key: 'pickedMode' } as const, null as AutoMode | null)
 
 const ttlMs = (t: CacheTtl) => (t === '1h' ? 3_600_000 : 300_000)
 // ponytail: auto keep-warm stops after 3 pings with nobody typing, so a session left overnight lets its cache go;
@@ -30,6 +33,8 @@ let isNarrowShown = false
 // keep-warm pings that failed in a row: capped even while a background agent runs, so a failing API is not
 // retried every second
 let failedPings = 0
+// the auto button's save, waiting for the clicks to stop
+let saveTimer: Timer | undefined
 // the last lastAt saved to the store; undefined after a reload, so the first tick saves it
 let savedAt: number | null | undefined
 
@@ -96,8 +101,8 @@ async function keepWarm($: $): Promise<{ ok: boolean; text: string }> {
 }
 
 // settings are userConfig fields; writing one saves to settings.json and reloads the module with the new value
-// the toast already names the plugin. A save made while the last one is still reloading the module finds no row, so
-// look once more after a second
+// the toast already names the plugin. A save made while the module reloads finds no row, so look once more after a
+// second; in the old module the reload cancels that wait, and session.start saves the click again
 async function setOption($: $, field: string, value: boolean | number | string) {
   const find = async () => (await $.config.list()).find(r => r.key.replace(/@[^.]+/, '') === `cache-timer.${field}`)
   const row = (await find()) ?? (await $.clock.sleep(1000), await find())
@@ -107,6 +112,12 @@ async function setOption($: $, field: string, value: boolean | number | string) 
   }
   const r = await $.config.set({ key: row.key, value })
   if (r.deny) $.ui.toast(`${field} unchanged: ${r.deny}`)
+}
+
+// the band changes at once; the saved setting catches up when the module reloads
+async function pickMode($: $, picked: AutoMode) {
+  await update($, autoMode, () => picked)
+  await update($, pickedMode, () => picked)
 }
 
 // whether a request kept the main conversation's cache warm: every main-thread request does; a subagent's
@@ -200,7 +211,12 @@ export const register: Register = (on, options) => {
       immediate: true,
     })
     await update($, ttl, () => configTtl)
-    await update($, autoMode, () => configMode)
+    const picked = await read($, pickedMode)
+    if (picked !== null && picked !== configMode) void setOption($, 'autoMode', picked)
+    else {
+      await update($, pickedMode, () => null)
+      await update($, autoMode, () => configMode)
+    }
     await restore($, configTtl)
     $.clock.every(1000, () => void tick($, lead))
     return next(e)
@@ -221,7 +237,7 @@ export const register: Register = (on, options) => {
     const modes: Record<string, AutoMode> = { off: 'off', compact: 'compact', 'keep-warm': 'keep warm' }
     const picked = modes[value]
     if (what === 'auto' && picked) {
-      await update($, autoMode, () => picked)
+      await pickMode($, picked)
       await setOption($, 'autoMode', picked)
       return { text: `Auto: ${picked}.` }
     }
@@ -330,10 +346,12 @@ export const register: Register = (on, options) => {
         void keepWarm($).then(r => $.ui.toast(r.text))
         break
       case 'auto': {
-        // the band changes at once; the saved setting catches up when the module reloads
+        // saved once the clicks stop: each save reloads the module, slowly in the desktop app, and a click during
+        // a reload waits for it and finds no settings row
         const picked = NEXT_MODE[mode]
-        await update($, autoMode, () => picked)
-        void setOption($, 'autoMode', picked)
+        await pickMode($, picked)
+        saveTimer?.cancel()
+        saveTimer = $.clock.after(1500, () => void setOption($, 'autoMode', picked))
         break
       }
       case 'time':

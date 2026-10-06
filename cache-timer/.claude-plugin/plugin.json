@@ -1,6 +1,6 @@
 {
   "name": "cache-timer",
-  "version": "0.2.6",
+  "version": "0.2.7",
   "description": "Prompt cache countdown with compact, keep warm, and an automatic action before it expires",
   "author": {
     "name": "rmkr",

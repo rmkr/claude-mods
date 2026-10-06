@@ -208,8 +208,8 @@ test('a compaction or a /clear ends the countdown', async ($, on) => {
   await ui.unmount()
 })
 
-test('the auto button cycles off, compact, keep warm, off with one settings write each', async ($, on) => {
-  mock.clock(on, { now: 1_000_000 })
+test('the auto button cycles off, compact, keep warm, off and saves once the clicks stop', async ($, on) => {
+  const clock = mock.clock(on, { now: 1_000_000 })
   engine(on)
   const writes: unknown[] = []
   on('config.list', () => ({ value: [{ key: 'cache-timer.autoMode', label: 'Auto action', kind: 'choice', value: 'off', provider: { plugin: 'cache-timer', tier: 'user' }, isLocked: false }] }) as any)
@@ -224,7 +224,9 @@ test('the auto button cycles off, compact, keep warm, off with one settings writ
     await ui.press({ key: 'auto' })
     labels.push((await ui.find({ key: 'auto' }))?.text)
   }
-  expect(writes).toEqual(['compact', 'keep warm', 'off'])
+  expect(writes).toEqual([])
+  await clock.advance(1500)
+  expect(writes).toEqual(['off'])
   expect(labels.map(l => l?.split(' ').slice(0, 2).join(' '))).toEqual(['auto compact', 'auto warm', 'auto off'])
   await ui.unmount()
 })
@@ -242,8 +244,28 @@ test('a save made while the module reloads looks for its row once more', async (
   await cacheOnce($)
   const ui = await $.ui.mount({ plugin: 'cache-timer', surface: 'terminal', ...BAND })
   await ui.press({ key: 'auto' })
-  await clock.advance(1000)
+  await clock.advance(2500)
   expect(writes).toEqual(['compact'])
+  await ui.unmount()
+})
+
+test('a reload with settings from before the click keeps the click and saves it again', async ($, on) => {
+  const clock = mock.clock(on, { now: 1_000_000 })
+  engine(on)
+  const writes: unknown[] = []
+  on('config.list', () => ({ value: [{ key: 'cache-timer.autoMode', label: 'Auto action', kind: 'choice', value: 'off', provider: { plugin: 'cache-timer', tier: 'user' }, isLocked: false }] }) as any)
+  on('config.set', ($: any, e: any) => {
+    writes.push(e.value)
+    return { value: e.value } as any
+  })
+  await cacheOnce($)
+  const ui = await $.ui.mount({ plugin: 'cache-timer', surface: 'desktop', ...BAND })
+  await ui.press({ key: 'auto' })
+  // stands for a reload whose options still say off, as the save the click made was cut off
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  expect((await ui.find({ key: 'auto' }))?.text?.startsWith('auto compact')).toBe(true)
+  await clock.advance(1500)
+  expect(writes).toEqual(['compact', 'compact'])
   await ui.unmount()
 })
 
