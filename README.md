@@ -33,7 +33,7 @@ While Claude is working the band shows `live` with a full bar, since every step 
 - **Auto off:** a reminder pops up 5 minutes before the cache expires, so you can choose then.
 - **Background agent still working:** auto-compact waits for it, so its report back finds the full conversation, and you get the reminder instead. Auto keep warm still fires.
 - **Leaving for the day:** do nothing. Auto keep warm stops after 3 pings with no message from you (pings while a background agent works don't count), so an idle session doesn't keep spending.
-- **Closing Claude Code:** the cache keeps counting down while it's closed. Reopen the conversation and the band picks the countdown back up; auto actions only run while it's open. A Claude Code update or a changed model, CLAUDE.md or plugin can still miss the cache; the hit % after your next message tells you.
+- **Closing Claude Code:** the cache keeps counting down while it's closed. Reopen the conversation, at launch or with `/resume`, and the band picks the countdown back up; auto actions only run while it's open. A Claude Code update or a changed model, CLAUDE.md or plugin can still miss the cache; the hit % after your next message tells you.
 - **Band in the way:** click the time to shrink it, or click `×` (or type `/cache`) to hide it. Type `/cache` to bring it back.
 
 ### Commands

@@ -32,6 +32,9 @@ let isNarrowShown = false
 let failedPings = 0
 // the last lastAt saved to the store; undefined after a reload, so the first tick saves it
 let savedAt: number | null | undefined
+// the conversation the band counts down: /clear and /resume go on to another under the same process with no
+// session.start, so the tick watches for a new id
+let sessionId: string | undefined
 
 // ms left before the cache lapses; null when there is nothing cached to lose
 async function left($: $, t: number) {
@@ -123,18 +126,22 @@ export function refreshesMain(agentId: string | undefined, usage: ModelUsage, ca
 
 // the countdown outlives a restart: the last request's time, saved per session (the transcript's id), so a
 // resumed conversation picks it up; in this one place, since lastAt changes in many
-async function save($: $) {
+async function save($: $, id: string) {
   const last = await read($, lastAt)
   if (last === savedAt) return
   savedAt = last
-  const key = `last:${await $.session.id()}`
+  const key = `last:${id}`
   await (last === null ? $.store.delete(key) : $.store.set(key, { at: last, tokens: await read($, cachedTokens) }))
 }
 
-async function restore($: $, ttl: CacheTtl) {
+// a conversation's saved countdown and auto mode, as it is opened: at start, or after a /clear or /resume
+async function restore($: $, id: string, configMode: AutoMode) {
+  sessionId = id
   const t = await $.clock.now()
-  const saved = (await $.store.get(`last:${await $.session.id()}`)) as { at: number; tokens: number } | undefined
-  if (saved && saved.at + ttlMs(ttl) > t) {
+  const mode = (await $.store.get(`mode:${id}`)) as AutoMode | undefined
+  await update($, autoMode, () => mode ?? configMode)
+  const saved = (await $.store.get(`last:${id}`)) as { at: number; tokens: number } | undefined
+  if (saved && saved.at + ttlMs(await read($, ttl)) > t) {
     await update($, lastAt, () => saved.at)
     await update($, cachedTokens, () => saved.tokens)
   }
@@ -145,8 +152,23 @@ async function restore($: $, ttl: CacheTtl) {
   }
 }
 
-async function tick($: $, lead: number) {
-  await save($)
+// another conversation took this one's place: nothing of this one's carries over
+async function switchTo($: $, id: string, configMode: AutoMode) {
+  sessionId = id
+  await update($, lastAt, () => null)
+  await update($, cachedTokens, () => 0)
+  await update($, hitPct, () => null)
+  await update($, isRunning, () => false)
+  await update($, hasWarned, () => false)
+  await update($, hasCompacted, () => false)
+  await update($, pings, () => 0)
+  await restore($, id, configMode)
+}
+
+async function tick($: $, lead: number, configMode: AutoMode) {
+  const id = await $.session.id()
+  if (id !== sessionId) await switchTo($, id, configMode)
+  await save($, id)
   const mode = await read($, autoMode)
   const t = await $.clock.now()
   const ms = await left($, t)
@@ -206,10 +228,8 @@ export const register: Register = (on, options) => {
       immediate: true,
     })
     await update($, ttl, () => configTtl)
-    const mode = (await $.store.get(`mode:${await $.session.id()}`)) as AutoMode | undefined
-    await update($, autoMode, () => mode ?? configMode)
-    await restore($, configTtl)
-    $.clock.every(1000, () => void tick($, lead))
+    await restore($, await $.session.id(), configMode)
+    $.clock.every(1000, () => void tick($, lead, configMode))
     return next(e)
   })
 
@@ -310,20 +330,6 @@ export const register: Register = (on, options) => {
       await update($, hasCompacted, () => true)
     }
     return r
-  })
-
-  // /clear and /resume go on to another conversation under the same plugin state, with nothing cached for it yet
-  on('session.end', async ($, e, next) => {
-    if (e.reason === 'clear' || e.reason === 'resume') {
-      await update($, lastAt, () => null)
-      await update($, cachedTokens, () => 0)
-      await update($, hitPct, () => null)
-      await update($, hasWarned, () => false)
-      await update($, hasCompacted, () => false)
-      await update($, pings, () => 0)
-      await update($, autoMode, () => configMode)
-    }
-    return next(e)
   })
 
   // every band button, handled by its key here rather than by the closure of the drawing it came from, so a press

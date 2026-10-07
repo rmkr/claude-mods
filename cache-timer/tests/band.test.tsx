@@ -183,7 +183,8 @@ test('on a 5m cache the default lead still reminds once', { options: { ttl: '5m'
 
 test('a compaction or a /clear ends the countdown', async ($, on) => {
   const clock = mock.clock(on, { now: 1_000_000 })
-  engine(on)
+  let id = 'this'
+  engine(on, undefined, [], {}, () => id)
   on('session.compact', () => ({ messages: [{ role: 'user', text: 'summary', toolUses: [] }] }) as any)
   on('turn.start', ($: any, e: any) => ({ turnId: e.turnId }) as any)
   on('turn.complete', () => ({ text: '' }) as any)
@@ -203,7 +204,9 @@ test('a compaction or a /clear ends the countdown', async ($, on) => {
   await cacheOnce($)
   await clock.advance(1000)
   expect(await ui.find({ key: 'compact' })).toBeDefined()
-  await $.session.end({ reason: 'clear', sessionId: 's' } as any)
+  // a /clear goes on under a new id, with no session.start
+  await $.session.end({ reason: 'clear', sessionId: 'this' } as any)
+  id = 'cleared'
   await clock.advance(1000)
   expect((await ui.find({ key: 'time' }))?.text).toBe('—')
   await ui.unmount()
@@ -264,5 +267,23 @@ test('a conversation reopened after its cache ran out starts over', async ($, on
   await clock.advance(1000)
   const ui = await $.ui.mount({ plugin: 'cache-timer', surface: 'terminal', ...BAND })
   expect((await ui.find({ key: 'time' }))?.text).toBe('—')
+  await ui.unmount()
+})
+
+test('a conversation opened with /resume picks up its countdown and auto mode', async ($, on) => {
+  const clock = mock.clock(on, { now: 10_000_000 })
+  let id = 'this'
+  engine(on, undefined, [], { 'last:old': { at: 10_000_000 - 15 * 60_000, tokens: 50_000 }, 'mode:old': 'compact' }, () => id)
+  on('session.end', ($: any, e: any) => ({ sessionId: e.sessionId }) as any)
+  await cacheOnce($)
+  await clock.advance(1000)
+  const ui = await $.ui.mount({ plugin: 'cache-timer', surface: 'terminal', ...BAND })
+  expect((await ui.find({ key: 'time' }))?.text).toBe('60m')
+  // /resume goes on under the resumed conversation's id, with no session.start
+  await $.session.end({ reason: 'resume', sessionId: 'this' } as any)
+  id = 'old'
+  await clock.advance(1000)
+  expect((await ui.find({ key: 'time' }))?.text).toBe('45m')
+  expect((await ui.find({ key: 'auto' }))?.text?.startsWith('auto compact')).toBe(true)
   await ui.unmount()
 })
