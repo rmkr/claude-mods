@@ -1,0 +1,39 @@
+{
+  "name": "cache-timer",
+  "version": "0.2.9",
+  "description": "Prompt cache countdown with compact, keep warm, and an automatic action before it expires",
+  "author": {
+    "name": "rmkr",
+    "url": "https://github.com/rmkr"
+  },
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "autoMode": {
+      "type": "string",
+      "title": "Auto action",
+      "description": "What happens on its own before the prompt cache expires, in a new chat (the band's auto button changes one chat): compact (at most once per idle stretch), keep warm (one tiny request; stops after 3 pings with no message from you), or off (a reminder instead).",
+      "default": "off",
+      "options": [
+        "off",
+        "compact",
+        "keep warm"
+      ]
+    },
+    "minutesBeforeExpiry": {
+      "type": "number",
+      "title": "Minutes before expiry",
+      "description": "How long before the cache expires the auto action runs. 5 acts at 55 minutes on a 1h cache.",
+      "default": 5
+    },
+    "ttl": {
+      "type": "string",
+      "title": "Cache TTL",
+      "description": "How long the prompt cache lives.",
+      "default": "1h",
+      "options": [
+        "1h",
+        "5m"
+      ]
+    }
+  }
+}

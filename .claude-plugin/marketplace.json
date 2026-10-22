@@ -1,0 +1,17 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "claude-mods",
+  "description": "Mods for Claude Code: bands, panes and commands built on function hooks.",
+  "owner": {
+    "name": "rmkr",
+    "url": "https://github.com/rmkr"
+  },
+  "plugins": [
+    {
+      "name": "cache-timer",
+      "description": "Prompt cache countdown with compact, keep warm, and an automatic action before it expires.",
+      "source": "./cache-timer",
+      "category": "productivity"
+    }
+  ]
+}
